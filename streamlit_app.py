@@ -114,7 +114,7 @@ def process_branch_file(uploaded_file, branch_name):
 
 
 def process_cancellation_file(uploaded_file):
-    """Extract cancellation list with deduplication and memory optimisations."""
+    """Extract cancellation list matching solely on FILE_NO."""
     try:
         df_raw = pd.read_excel(uploaded_file, header=None)
         header_row_idx = None
@@ -128,16 +128,13 @@ def process_cancellation_file(uploaded_file):
         df = pd.read_excel(uploaded_file, header=header_row_idx)
         df.columns = df.columns.str.strip()
 
-        if "FILE_NO" not in df.columns or "BRANCH" not in df.columns:
+        if "FILE_NO" not in df.columns:
+            st.error("The Cancellation sheet must contain a 'FILE_NO' column.")
             return None
 
-        # Keep only relevant columns, drop duplicates to prevent row explosion
-        df = df[["FILE_NO", "BRANCH"]].drop_duplicates()
+        # Isolate unique target files to avoid duplicates bloating the join
+        df = df[["FILE_NO"]].drop_duplicates()
         df["FILE_NO"] = df["FILE_NO"].astype(str).str.strip()
-        df["BRANCH"] = df["BRANCH"].astype(str).str.strip().upper()
-
-        # Convert to categorical to save memory
-        df["BRANCH"] = df["BRANCH"].astype("category")
         return df
 
     except Exception as e:
@@ -180,13 +177,11 @@ if cxl_file:
         df_cxl = process_cancellation_file(cxl_file)
         if df_cxl is not None and not df_cxl.empty:
             total_df["FILE_NO"] = total_df["FILE_NO"].astype(str).str.strip()
-            total_df["Branch"] = total_df["Branch"].astype(str).str.strip().upper()
 
-            # Left join with indicator to find cancelled rows
+            # Left join exclusively on FILE_NO
             merged = total_df.merge(
                 df_cxl,
-                left_on=["FILE_NO", "Branch"],
-                right_on=["FILE_NO", "BRANCH"],
+                on="FILE_NO",
                 how="left",
                 indicator=True
             )
@@ -195,7 +190,7 @@ if cxl_file:
             cxl_count = cxl_mask.sum()
 
             # Keep only non‑cancelled rows
-            total_df = merged[~cxl_mask].drop(columns=["BRANCH", "_merge"])
+            total_df = merged[~cxl_mask].drop(columns=["_merge"]).copy()
 
             # Free memory
             del merged, df_cxl
@@ -211,7 +206,6 @@ if cxl_file:
                 st.warning("⚠️ Deductions successfully applied! All data from uploaded branches was cancelled out by the cancellation register records.")
                 st.stop()
 
-# If after cancellation total_df is empty (handled above)
 grand_corporate_revenue = total_df['NETMAINPRODUCT'].sum()
 
 # -------------------- BUILD TABS --------------------
@@ -341,5 +335,7 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
         st.markdown("**Raw Net Branch Ledger Records**")
         display_raw = b_df[["FILE_NO", "Agency", "Product_Type", "NETMAINPRODUCT"]].copy()
         display_raw = sort_by_corporate_hierarchy(display_raw, "Agency")
+        display_raw = format_currency_df(display_raw, ["NETMAINPRODUCT"])
+        st.dataframe(display_raw, use_container_width=True, hide_index=True)
         display_raw = format_currency_df(display_raw, ["NETMAINPRODUCT"])
         st.dataframe(display_raw, use_container_width=True, hide_index=True)
