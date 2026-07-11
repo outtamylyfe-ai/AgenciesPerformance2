@@ -104,8 +104,12 @@ def process_branch_file(uploaded_file, branch_name):
 
         df_confirmed["Product_Type"] = df_confirmed["PRODUCT_CODE"].apply(get_product_type)
         df_confirmed["Branch"] = branch_name
+        
         if "FILE_NO" in df_confirmed.columns:
-            df_confirmed["FILE_NO"] = df_confirmed["FILE_NO"].astype(str).str.strip()
+            # Drop NaN, safely convert to text strings, and remove trailing floating point (.0) formats
+            df_confirmed = df_confirmed.dropna(subset=["FILE_NO"])
+            df_confirmed["FILE_NO"] = df_confirmed["FILE_NO"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            
         return df_confirmed
 
     except Exception as e:
@@ -114,7 +118,7 @@ def process_branch_file(uploaded_file, branch_name):
 
 
 def process_cancellation_file(uploaded_file):
-    """Extract cancellation list matching solely on FILE_NO."""
+    """Extract cancellation list matching safely across any text/numeric configurations."""
     try:
         df_raw = pd.read_excel(uploaded_file, header=None)
         header_row_idx = None
@@ -132,9 +136,9 @@ def process_cancellation_file(uploaded_file):
             st.error("The Cancellation sheet must contain a 'FILE_NO' column.")
             return None
 
-        # Isolate unique target files to avoid duplicates bloating the join
-        df = df[["FILE_NO"]].drop_duplicates()
-        df["FILE_NO"] = df["FILE_NO"].astype(str).str.strip()
+        # Isolate unique target files, convert to clean strings, remove trailing decimals (.0)
+        df = df[["FILE_NO"]].dropna(subset=["FILE_NO"]).drop_duplicates()
+        df["FILE_NO"] = df["FILE_NO"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         return df
 
     except Exception as e:
@@ -176,32 +180,25 @@ if cxl_file:
     with st.spinner("Processing cancellations..."):
         df_cxl = process_cancellation_file(cxl_file)
         if df_cxl is not None and not df_cxl.empty:
-            total_df["FILE_NO"] = total_df["FILE_NO"].astype(str).str.strip()
+            # Ensure total_df is formatted exactly like the cancellation lookup list
+            total_df["FILE_NO"] = total_df["FILE_NO"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
-            # Left join exclusively on FILE_NO
-            merged = total_df.merge(
-                df_cxl,
-                on="FILE_NO",
-                how="left",
-                indicator=True
-            )
-
-            cxl_mask = merged["_merge"] == "both"
+            # Match and filter rows strictly via file array matching
+            cxl_mask = total_df["FILE_NO"].isin(df_cxl["FILE_NO"])
             cxl_count = cxl_mask.sum()
 
-            # Keep only non‑cancelled rows
-            total_df = merged[~cxl_mask].drop(columns=["_merge"]).copy()
+            total_df = total_df[~cxl_mask].copy()
 
-            # Free memory
-            del merged, df_cxl
+            # Free up system memory paths
+            del df_cxl
 
-            # Update branch DataFrames
+            # Re-update active branch mappings
             for name in list(active_branches.keys()):
                 active_branches[name] = total_df[total_df["Branch"] == name].copy()
                 if active_branches[name].empty:
                     del active_branches[name]
 
-            # If everything is cancelled, stop
+            # Safe interruption if everything matches deductions
             if total_df.empty:
                 st.warning("⚠️ Deductions successfully applied! All data from uploaded branches was cancelled out by the cancellation register records.")
                 st.stop()
@@ -335,7 +332,5 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
         st.markdown("**Raw Net Branch Ledger Records**")
         display_raw = b_df[["FILE_NO", "Agency", "Product_Type", "NETMAINPRODUCT"]].copy()
         display_raw = sort_by_corporate_hierarchy(display_raw, "Agency")
-        display_raw = format_currency_df(display_raw, ["NETMAINPRODUCT"])
-        st.dataframe(display_raw, use_container_width=True, hide_index=True)
         display_raw = format_currency_df(display_raw, ["NETMAINPRODUCT"])
         st.dataframe(display_raw, use_container_width=True, hide_index=True)
