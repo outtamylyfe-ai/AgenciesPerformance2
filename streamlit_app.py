@@ -7,19 +7,12 @@ import traceback
 st.set_page_config(page_title="Multi-Branch Sales Dashboard", layout="wide")
 
 st.title("📊 Sales Dashboard - Multi-Branch Analysis")
-st.markdown("Upload Excel files for **CCK**, **LST**, and **TLT** branches, and log cancellations to view updated insights.")
+st.markdown("Upload Excel files for **CCK**, **LST**, and **TLT** branches alongside **Cancellations** to view insights.")
 
-# -------------------- CONSTANTS & CONFIG --------------------
-AGENCY_ORDER = ["FGY", "ZB", "APG", "SLA", "JFL", "Others"]
+# -------------------- CONSTANTS --------------------
+AGENCY_ORDER = ["FGY", "ZB", "APG", "SLA", "JFL"]
 PRODUCT_ORDER = ["FSP", "Pedestal", "Niche", "Others"]
-BRANCH_OPTIONS = ["CCK", "LST", "TLT"]
-
-product_colours = {
-    "FSP": "#1f77b4", 
-    "Pedestal": "#ff7f0e", 
-    "Niche": "#2ca02c", 
-    "Others": "#d62728"
-}
+product_colours = {"FSP": "#1f77b4", "Pedestal": "#ff7f0e", "Niche": "#2ca02c", "Others": "#d62728"}
 
 # -------------------- FORMATTING UTILITIES --------------------
 def format_currency(value):
@@ -93,7 +86,7 @@ def process_branch_file(uploaded_file, branch_name):
             for key, value in agency_rename.items():
                 if key in raw:
                     return value
-            return "Others"
+            return raw
 
         df_confirmed["Agency"] = df_confirmed.apply(get_agency, axis=1)
 
@@ -111,29 +104,42 @@ def process_branch_file(uploaded_file, branch_name):
 
         df_confirmed["Product_Type"] = df_confirmed["PRODUCT_CODE"].apply(get_product_type)
         df_confirmed["Branch"] = branch_name
-        
         if "FILE_NO" in df_confirmed.columns:
-            df_confirmed = df_confirmed.dropna(subset=["FILE_NO"])
-            df_confirmed["FILE_NO"] = df_confirmed["FILE_NO"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-            
+            df_confirmed["FILE_NO"] = df_confirmed["FILE_NO"].astype(str).str.strip()
         return df_confirmed
 
     except Exception as e:
         st.error(f"Error processing {branch_name} file: {e}")
         return None
 
-def calculate_cancellations_on_the_fly(editor_state):
-    """Calculates cumulative total value of active adjustments inside the matrix workspace on the fly."""
-    if editor_state is None or editor_state.empty:
-        return 0.0
-    
-    # Drop records missing vital financial information 
-    valid_records = editor_state.dropna(subset=["Sales_Amount", "Qty"])
-    if valid_records.empty:
-        return 0.0
-        
-    # Calculate vector product total across rows
-    return (valid_records["Sales_Amount"] * valid_records["Qty"]).sum()
+
+def process_cancellation_file(uploaded_file):
+    """Extract cancellation list matching solely on FILE_NO."""
+    try:
+        df_raw = pd.read_excel(uploaded_file, header=None)
+        header_row_idx = None
+        for idx, row in df_raw.iterrows():
+            if row.astype(str).str.contains("FILE_NO").any():
+                header_row_idx = idx
+                break
+        if header_row_idx is None:
+            return None
+
+        df = pd.read_excel(uploaded_file, header=header_row_idx)
+        df.columns = df.columns.str.strip()
+
+        if "FILE_NO" not in df.columns:
+            st.error("The Cancellation sheet must contain a 'FILE_NO' column.")
+            return None
+
+        # Isolate unique target files to avoid duplicates bloating the join
+        df = df[["FILE_NO"]].drop_duplicates()
+        df["FILE_NO"] = df["FILE_NO"].astype(str).str.strip()
+        return df
+
+    except Exception as e:
+        st.error(f"Error reading cancellation file: {e}")
+        return None
 
 # -------------------- SIDEBAR FILE UPLOADERS --------------------
 st.sidebar.header("📁 Branch File Uploaders")
@@ -141,40 +147,9 @@ cck_file = st.sidebar.file_uploader("Upload CCK Branch Excel", type=["xlsx", "xl
 lst_file = st.sidebar.file_uploader("Upload LST Branch Excel", type=["xlsx", "xls"])
 tlt_file = st.sidebar.file_uploader("Upload TLT Branch Excel", type=["xlsx", "xls"])
 
-# -------------------- MULTI-ROW SPREADSHEET CANCELLATION INTERFACE --------------------
 st.sidebar.write("---")
-st.sidebar.header("🛑 Batch Cancellation Registry")
-st.sidebar.caption("Click any cell to edit or choose dropdown options. Use the bottom row to paste or add multiple items.")
-
-# Establish baseline setup structure inside the tracking dictionary
-if "editor_data" not in st.session_state:
-    st.session_state.editor_data = pd.DataFrame([
-        {"Branch": "LST", "Agency": "FGY", "Product_Type": "Niche", "Sales_Amount": 30000.0, "Qty": 2}
-    ])
-
-# Render interactive spreadsheet inside sidebar container 
-edited_cxl_df = st.sidebar.data_editor(
-    st.session_state.editor_data,
-    num_rows="dynamic",
-    column_config={
-        "Branch": st.column_config.SelectboxColumn("Branch", options=BRANCH_OPTIONS, required=True),
-        "Agency": st.column_config.SelectboxColumn("Agency", options=AGENCY_ORDER, required=True),
-        "Product_Type": st.column_config.SelectboxColumn("Product Type", options=PRODUCT_ORDER, required=True),
-        "Sales_Amount": st.column_config.NumberColumn("Amount ($)", min_value=0.0, format="$%.2f", required=True),
-        "Qty": st.column_config.NumberColumn("QTY", min_value=1, step=1, default=1, required=True),
-    },
-    hide_index=True,
-    use_container_width=True,
-    key="batch_cxl_editor"
-)
-
-# Call the computation engine to display values on the fly
-pending_total_deduction = calculate_cancellations_on_the_fly(edited_cxl_df)
-st.sidebar.metric(
-    label="Estimated Active Deductions (On-the-Fly)", 
-    value=format_currency(pending_total_deduction),
-    help="Live monitoring showing total calculated value across the workspace grid before data frame application."
-)
+st.sidebar.header("🛑 Operational Deductions")
+cxl_file = st.sidebar.file_uploader("Upload Sales Cancellation Excel", type=["xlsx", "xls"])
 
 # -------------------- PROCESS BRANCH FILES --------------------
 branch_dfs = {}
@@ -185,69 +160,53 @@ if lst_file:
 if tlt_file:
     branch_dfs["TLT"] = process_branch_file(tlt_file, "TLT")
 
+# Filter out any None or empty DataFrames
 active_branches = {k: v for k, v in branch_dfs.items() if v is not None and not v.empty}
 
 if not active_branches:
-    st.info("👋 Welcome! Please upload at least one valid Branch Excel data sheet via the sidebar to initialize the dashboard panels.")
+    st.info("👋 Welcome! Please upload at least one valid Branch Excel data sheet via the sidebar to initialise the dashboard panels.")
     st.stop()
 
-# Consolidate raw uploaded data
+# -------------------- CONSOLIDATE DATA --------------------
 total_df = pd.concat(active_branches.values(), ignore_index=True)
 
-# -------------------- APPLY BATCH ATTRIBUTE-BASED DEDUCTIONS --------------------
-total_deducted_amount = 0.0
+# -------------------- APPLY CANCELLATIONS --------------------
+cxl_count = 0
+if cxl_file:
+    with st.spinner("Processing cancellations..."):
+        df_cxl = process_cancellation_file(cxl_file)
+        if df_cxl is not None and not df_cxl.empty:
+            total_df["FILE_NO"] = total_df["FILE_NO"].astype(str).str.strip()
 
-if edited_cxl_df is not None and not edited_cxl_df.empty:
-    valid_cxl_df = edited_cxl_df.dropna(subset=["Branch", "Agency", "Product_Type", "Sales_Amount", "Qty"])
-    
-    for _, item in valid_cxl_df.iterrows():
-        row_deduction = item["Sales_Amount"] * item["Qty"]
-        if row_deduction <= 0:
-            continue
-            
-        total_deducted_amount += row_deduction
-        
-        # Locate the structural intersections in our primary dataframe pool
-        mask = (
-            (total_df["Branch"] == item["Branch"]) & 
-            (total_df["Agency"] == item["Agency"]) & 
-            (total_df["Product_Type"] == item["Product_Type"])
-        )
-        
-        matching_rows = total_df[mask]
-        
-        if not matching_rows.empty:
-            # Sort matching rows lowest-value first to systematically chip away at total deduction target
-            matching_indices = matching_rows.sort_values(by="NETMAINPRODUCT").index
-            deduction_left = row_deduction
-            
-            for idx in matching_indices:
-                current_val = total_df.at[idx, "NETMAINPRODUCT"]
-                
-                if current_val <= deduction_left:
-                    deduction_left -= current_val
-                    total_df.at[idx, "NETMAINPRODUCT"] = 0.0
-                else:
-                    total_df.at[idx, "NETMAINPRODUCT"] = current_val - deduction_left
-                    deduction_left = 0.0
-                    break
-    
-    # Filter out records that were reduced down to zero to clean up downstream visualization matrix counts
-    total_df = total_df[total_df["NETMAINPRODUCT"] != 0].copy()
+            # Left join exclusively on FILE_NO
+            merged = total_df.merge(
+                df_cxl,
+                on="FILE_NO",
+                how="left",
+                indicator=True
+            )
 
-    # Re-slice updated modifications back into individual active branch components
-    for name in list(active_branches.keys()):
-        active_branches[name] = total_df[total_df["Branch"] == name].copy()
+            cxl_mask = merged["_merge"] == "both"
+            cxl_count = cxl_mask.sum()
+
+            # Keep only non‑cancelled rows
+            total_df = merged[~cxl_mask].drop(columns=["_merge"]).copy()
+
+            # Free memory
+            del merged, df_cxl
+
+            # Update branch DataFrames
+            for name in list(active_branches.keys()):
+                active_branches[name] = total_df[total_df["Branch"] == name].copy()
+                if active_branches[name].empty:
+                    del active_branches[name]
+
+            # If everything is cancelled, stop
+            if total_df.empty:
+                st.warning("⚠️ Deductions successfully applied! All data from uploaded branches was cancelled out by the cancellation register records.")
+                st.stop()
 
 grand_corporate_revenue = total_df['NETMAINPRODUCT'].sum()
-
-# -------------------- SHOW ACTIVE MANUAL CANCELLATIONS AUDIT TABLE --------------------
-if total_deducted_amount > 0:
-    with st.expander("📄 Batch Cancellation Audit Registry Matrix", expanded=False):
-        audit_copy = edited_cxl_df.copy()
-        audit_copy["Total_Deduction"] = audit_copy["Sales_Amount"] * audit_copy["Qty"]
-        display_audit = format_currency_df(audit_copy, ["Sales_Amount", "Total_Deduction"])
-        st.dataframe(display_audit, use_container_width=True, hide_index=True)
 
 # -------------------- BUILD TABS --------------------
 tab_titles = ["Consolidated Overview"] + [f"{name} Branch" for name in active_branches.keys()]
@@ -260,69 +219,65 @@ with tabs[0]:
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Net Combined Sales", format_currency(grand_corporate_revenue))
     c2.metric("Active Operating Branches", len(active_branches))
-    
-    if total_deducted_amount > 0:
-        c3.metric("Net Confirmed Transactions", f"{len(total_df):,}", delta=f"-{format_currency(total_deducted_amount)} Cancelled", delta_color="inverse")
+    if cxl_file and cxl_count > 0:
+        c3.metric("Net Confirmed Transactions", f"{len(total_df):,}", delta=f"-{cxl_count} Cancelled")
     else:
         c3.metric("Total Confirmed Transactions", f"{len(total_df):,}")
 
     st.write("---")
 
     st.subheader("Overall Performance by Agency Hierarchy")
-    if not total_df.empty:
-        global_agency_prod = total_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
-        global_agency_prod = sort_by_corporate_hierarchy(global_agency_prod, "Agency")
+    global_agency_prod = total_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
+    global_agency_prod = sort_by_corporate_hierarchy(global_agency_prod, "Agency")
 
-        fig_gap = px.bar(
-            global_agency_prod,
-            x="Agency",
-            y="NETMAINPRODUCT",
-            color="Product_Type",
-            color_discrete_map=product_colours,
-            barmode="stack",
-            text=global_agency_prod["NETMAINPRODUCT"].apply(format_chart_label)
-        )
-        fig_gap.update_layout(xaxis={'categoryorder': 'array', 'categoryarray': AGENCY_ORDER})
-        st.plotly_chart(fig_gap, use_container_width=True)
+    fig_gap = px.bar(
+        global_agency_prod,
+        x="Agency",
+        y="NETMAINPRODUCT",
+        color="Product_Type",
+        color_discrete_map=product_colours,
+        barmode="stack",
+        text=global_agency_prod["NETMAINPRODUCT"].apply(format_chart_label)
+    )
+    fig_gap.update_layout(xaxis={'categoryorder': 'array', 'categoryarray': AGENCY_ORDER})
+    st.plotly_chart(fig_gap, use_container_width=True)
 
-        # Pivot table
-        global_pivot = total_df.pivot_table(
-            index="Agency",
-            columns="Product_Type",
-            values="NETMAINPRODUCT",
-            aggfunc="sum",
-            fill_value=0
-        )
-        for p_col in PRODUCT_ORDER:
-            if p_col not in global_pivot.columns:
-                global_pivot[p_col] = 0.0
-        global_pivot = global_pivot[PRODUCT_ORDER]
-        global_pivot["Total Contribution ($)"] = global_pivot.sum(axis=1)
-        global_pivot["Overall Corporate Contribution %"] = (global_pivot["Total Contribution ($)"] / max(grand_corporate_revenue, 1)) * 100
-        global_pivot = global_pivot.reindex(AGENCY_ORDER).fillna(0)
+    # Pivot table
+    global_pivot = total_df.pivot_table(
+        index="Agency",
+        columns="Product_Type",
+        values="NETMAINPRODUCT",
+        aggfunc="sum",
+        fill_value=0
+    )
+    for p_col in PRODUCT_ORDER:
+        if p_col not in global_pivot.columns:
+            global_pivot[p_col] = 0.0
+    global_pivot = global_pivot[PRODUCT_ORDER]
+    global_pivot["Total Contribution ($)"] = global_pivot.sum(axis=1)
+    global_pivot["Overall Corporate Contribution %"] = (global_pivot["Total Contribution ($)"] / grand_corporate_revenue) * 100
+    global_pivot = global_pivot.reindex(AGENCY_ORDER).fillna(0)
 
-        st.markdown("**Data Matrix: Overall Agency Product Mix**")
-        display_global_pivot = format_currency_df(
-            global_pivot,
-            ["FSP", "Pedestal", "Niche", "Others", "Total Contribution ($)"]
-        )
-        display_global_pivot["Overall Corporate Contribution %"] = display_global_pivot["Overall Corporate Contribution %"].apply(format_pct)
-        st.dataframe(display_global_pivot, use_container_width=True)
+    st.markdown("**Data Matrix: Overall Agency Product Mix**")
+    display_global_pivot = format_currency_df(
+        global_pivot,
+        ["FSP", "Pedestal", "Niche", "Others", "Total Contribution ($)"]
+    )
+    display_global_pivot["Overall Corporate Contribution %"] = display_global_pivot["Overall Corporate Contribution %"].apply(format_pct)
+    st.dataframe(display_global_pivot, use_container_width=True)
 
-        st.write("---")
-        st.subheader("Overall Performance by Product Portfolio")
-        prod_sum = total_df.groupby("Product_Type")["NETMAINPRODUCT"].sum().reset_index()
-        fig_p = px.pie(
-            prod_sum,
-            names="Product_Type",
-            values="NETMAINPRODUCT",
-            hole=0.3,
-            color="Product_Type",
-            color_discrete_map=product_colours
-        )
-        st.plotly_chart(fig_p, use_container_width=True)
-    else:
-        st.warning("No sales data available. Logged deductions match or exceed complete branch turnover volume.")
+    st.write("---")
+    st.subheader("Overall Performance by Product Portfolio")
+    prod_sum = total_df.groupby("Product_Type")["NETMAINPRODUCT"].sum().reset_index()
+    fig_p = px.pie(
+        prod_sum,
+        names="Product_Type",
+        values="NETMAINPRODUCT",
+        hole=0.3,
+        color="Product_Type",
+        color_discrete_map=product_colours
+    )
+    st.plotly_chart(fig_p, use_container_width=True)
 
 # ==================== DYNAMIC BRANCH TABS ====================
 for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
@@ -336,52 +291,49 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
         mc3.metric("Volume of Line Orders", f"{len(b_df):,}")
 
         st.subheader(f"Agency Performance & Product Mix in {b_name}")
-        if not b_df.empty:
-            branch_agency_prod = b_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
-            branch_agency_prod = sort_by_corporate_hierarchy(branch_agency_prod, "Agency")
+        branch_agency_prod = b_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
+        branch_agency_prod = sort_by_corporate_hierarchy(branch_agency_prod, "Agency")
 
-            fig_br_ap = px.bar(
-                branch_agency_prod,
-                x="Agency",
-                y="NETMAINPRODUCT",
-                color="Product_Type",
-                color_discrete_map=product_colours,
-                barmode="stack",
-                text=branch_agency_prod["NETMAINPRODUCT"].apply(format_chart_label)
-            )
-            fig_br_ap.update_layout(xaxis={'categoryorder': 'array', 'categoryarray': AGENCY_ORDER})
-            st.plotly_chart(fig_br_ap, use_container_width=True)
+        fig_br_ap = px.bar(
+            branch_agency_prod,
+            x="Agency",
+            y="NETMAINPRODUCT",
+            color="Product_Type",
+            color_discrete_map=product_colours,
+            barmode="stack",
+            text=branch_agency_prod["NETMAINPRODUCT"].apply(format_chart_label)
+        )
+        fig_br_ap.update_layout(xaxis={'categoryorder': 'array', 'categoryarray': AGENCY_ORDER})
+        st.plotly_chart(fig_br_ap, use_container_width=True)
 
-            branch_pivot = b_df.pivot_table(
-                index="Agency",
-                columns="Product_Type",
-                values="NETMAINPRODUCT",
-                aggfunc="sum",
-                fill_value=0
-            )
-            for p_col in PRODUCT_ORDER:
-                if p_col not in branch_pivot.columns:
-                    branch_pivot[p_col] = 0.0
-            branch_pivot = branch_pivot[PRODUCT_ORDER]
-            branch_pivot["Total Branch Sales ($)"] = branch_pivot.sum(axis=1)
-            branch_pivot["Agency Contribution in Branch %"] = (branch_pivot["Total Branch Sales ($)"] / max(b_total, 1)) * 100
-            branch_pivot["Agency Branch Contribution in Overall %"] = (branch_pivot["Total Branch Sales ($)"] / max(grand_corporate_revenue, 1)) * 100
-            branch_pivot = branch_pivot.reindex(AGENCY_ORDER).fillna(0)
+        branch_pivot = b_df.pivot_table(
+            index="Agency",
+            columns="Product_Type",
+            values="NETMAINPRODUCT",
+            aggfunc="sum",
+            fill_value=0
+        )
+        for p_col in PRODUCT_ORDER:
+            if p_col not in branch_pivot.columns:
+                branch_pivot[p_col] = 0.0
+        branch_pivot = branch_pivot[PRODUCT_ORDER]
+        branch_pivot["Total Branch Sales ($)"] = branch_pivot.sum(axis=1)
+        branch_pivot["Agency Contribution in Branch %"] = (branch_pivot["Total Branch Sales ($)"] / b_total) * 100
+        branch_pivot["Agency Branch Contribution in Overall %"] = (branch_pivot["Total Branch Sales ($)"] / grand_corporate_revenue) * 100
+        branch_pivot = branch_pivot.reindex(AGENCY_ORDER).fillna(0)
 
-            st.markdown(f"**Data Matrix: {b_name} Agency Performance Summary**")
-            display_branch_pivot = format_currency_df(
-                branch_pivot,
-                ["FSP", "Pedestal", "Niche", "Others", "Total Branch Sales ($)"]
-            )
-            display_branch_pivot["Agency Contribution in Branch %"] = display_branch_pivot["Agency Contribution in Branch %"].apply(format_pct)
-            display_branch_pivot["Agency Branch Contribution in Overall %"] = display_branch_pivot["Agency Branch Contribution in Overall %"].apply(format_pct)
-            st.dataframe(display_branch_pivot, use_container_width=True)
+        st.markdown(f"**Data Matrix: {b_name} Agency Performance Summary**")
+        display_branch_pivot = format_currency_df(
+            branch_pivot,
+            ["FSP", "Pedestal", "Niche", "Others", "Total Branch Sales ($)"]
+        )
+        display_branch_pivot["Agency Contribution in Branch %"] = display_branch_pivot["Agency Contribution in Branch %"].apply(format_pct)
+        display_branch_pivot["Agency Branch Contribution in Overall %"] = display_branch_pivot["Agency Branch Contribution in Overall %"].apply(format_pct)
+        st.dataframe(display_branch_pivot, use_container_width=True)
 
-            st.write("---")
-            st.markdown("**Raw Net Branch Ledger Records**")
-            display_raw = b_df[["FILE_NO", "Agency", "Product_Type", "NETMAINPRODUCT"]].copy()
-            display_raw = sort_by_corporate_hierarchy(display_raw, "Agency")
-            display_raw = format_currency_df(display_raw, ["NETMAINPRODUCT"])
-            st.dataframe(display_raw, use_container_width=True, hide_index=True)
-        else:
-            st.info("All metrics for this specific branch were completely zeroed out by applied cancellations.")
+        st.write("---")
+        st.markdown("**Raw Net Branch Ledger Records**")
+        display_raw = b_df[["FILE_NO", "Agency", "Product_Type", "NETMAINPRODUCT"]].copy()
+        display_raw = sort_by_corporate_hierarchy(display_raw, "Agency")
+        display_raw = format_currency_df(display_raw, ["NETMAINPRODUCT"])
+        st.dataframe(display_raw, use_container_width=True, hide_index=True)
