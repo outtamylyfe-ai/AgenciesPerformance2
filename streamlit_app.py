@@ -3,12 +3,11 @@ import pandas as pd
 import plotly.express as px
 import io
 import datetime
-import matplotlib.pyplot as plt
 
 # --- REPORTLAB IMPORTS FOR THE COMPILATION ENGINE ---
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
@@ -57,59 +56,6 @@ def sort_by_corporate_hierarchy(df, agency_col="Agency"):
     df[agency_col] = pd.Categorical(df[agency_col], categories=AGENCY_ORDER, ordered=True)
     return df.sort_values(agency_col)
 
-# -------------------- BACKGROUND PLOT GENERATORS --------------------
-def generate_pdf_bar_chart(total_df):
-    """Generates a native corporate stacked bar chart for the PDF report layout using Matplotlib."""
-    pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
-    pivot = pivot.reindex(AGENCY_ORDER).fillna(0)
-    for prod in PRODUCT_ORDER:
-        if prod not in pivot.columns: pivot[prod] = 0.0
-    pivot = pivot[PRODUCT_ORDER]
-
-    fig, ax = plt.subplots(figsize=(7.5, 3), dpi=200)
-    bottom = pd.Series(0.0, index=pivot.index)
-    
-    for prod in PRODUCT_ORDER:
-        ax.bar(pivot.index, pivot[prod], bottom=bottom, label=prod, color=product_colours[prod], edgecolor='white', width=0.6)
-        bottom += pivot[prod]
-        
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_color('#cccccc')
-    ax.spines['bottom'].set_color('#cccccc')
-    ax.tick_params(axis='both', colors='#333333', labelsize=8)
-    ax.set_ylabel("Revenue Value ($)", color='#333333', fontsize=8)
-    ax.legend(loc='upper right', frameon=False, fontsize=7)
-    
-    plt.tight_layout()
-    img_buf = io.BytesIO()
-    plt.savefig(img_buf, format='png', bbox_inches='tight')
-    plt.close(fig)
-    img_buf.seek(0)
-    return img_buf
-
-def generate_pdf_pie_chart(total_df):
-    """Generates a corporate performance breakdown pie chart for the PDF layout."""
-    prod_sum = total_df.groupby("Product_Type")["NETMAINPRODUCT"].sum().reindex(PRODUCT_ORDER).fillna(0)
-    
-    fig, ax = plt.subplots(figsize=(4.5, 3), dpi=200)
-    colors_list = [product_colours[p] for p in PRODUCT_ORDER]
-    
-    wedges, texts, autotexts = ax.pie(
-        prod_sum, labels=PRODUCT_ORDER, autopct='%1.1f%%', 
-        startangle=90, colors=colors_list, pctdistance=0.75,
-        textprops=dict(color="#333333", fontsize=8),
-        wedgeprops=dict(width=0.4, edgecolor='white')
-    )
-    plt.setp(autotexts, size=7, weight="bold")
-    
-    plt.tight_layout()
-    img_buf = io.BytesIO()
-    plt.savefig(img_buf, format='png', bbox_inches='tight')
-    plt.close(fig)
-    img_buf.seek(0)
-    return img_buf
-
 # -------------------- NATIVE PDF REPORT ENGINE --------------------
 class NumberedCanvas(canvas.Canvas):
     """Dynamic canvas to handle real-time professional header/footer two-pass pagination."""
@@ -138,7 +84,7 @@ class NumberedCanvas(canvas.Canvas):
         self.setStrokeColor(colors.HexColor("#d3d3d3"))
         self.setLineWidth(0.5)
         self.line(0.5 * inch, 10.5 * inch, 8.0 * inch, 10.5 * inch)
-        self.drawString(0.5 * inch, 10.6 * inch, "Corporate Sales & Revenue Risk Management Report")
+        self.drawString(0.5 * inch, 10.6 * inch, "Executive Performance Overview")
         
         # Footer
         self.line(0.5 * inch, 0.75 * inch, 8.0 * inch, 0.75 * inch)
@@ -148,7 +94,7 @@ class NumberedCanvas(canvas.Canvas):
         self.restoreState()
 
 def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, total_deducted):
-    """Compiles all structured matrix arrays, visuals, and data tables into an elegant PDF layout."""
+    """Compiles all structured matrix arrays and data tables into an elegant PDF layout without charts."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -172,32 +118,33 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
 
     # Title Banner Blocks
     elements.append(Paragraph("Consolidated Performance & Operational Sales Matrix", title_style))
-    elements.append(Paragraph(f"Active Portfolios Assessment | Net Combined Revenue Workspace Turnover: {format_currency(grand_revenue)}", subtitle_style))
+    elements.append(Paragraph(f"Active Portfolios Assessment | Executive Workbook Summary", subtitle_style))
     elements.append(Spacer(1, 5))
 
-    # --- SECTION 1: VISUALISATIONS FIRST ---
-    elements.append(Paragraph("1. Executive Data Visualizations (Visual Charts)", section_style))
+    # --- SECTION 1: ACCENTUATED OVERALL PERFORMANCE HIGHLIGHTS ---
+    elements.append(Paragraph("1. Executive Summary & Core Financial Positions", section_style))
     
-    bar_img_stream = generate_pdf_bar_chart(total_df)
-    pie_img_stream = generate_pdf_pie_chart(total_df)
-    
-    rl_bar = Image(bar_img_stream, width=4.4 * inch, height=1.8 * inch)
-    rl_pie = Image(pie_img_stream, width=2.6 * inch, height=1.8 * inch)
-    
-    chart_layout_data = [[rl_bar, rl_pie]]
-    chart_table = Table(chart_layout_data, colWidths=[4.6*inch, 2.9*inch])
-    chart_table.setStyle(TableStyle([
+    perf_summary_data = [
+        [Paragraph("<b>Financial KPI Metric</b>", table_header_style), Paragraph("<b>Consolidated Value Valuation</b>", table_header_style)],
+        [Paragraph("TOTAL ULTIMATE NET COMBINED SALES", table_cell_bold), Paragraph(f"<b>{format_currency(grand_revenue)}</b>", table_cell_bold)],
+        [Paragraph("TOTAL OVERALL VALUE DEDUCTIONS", table_cell_style), Paragraph(format_currency(total_deducted), table_cell_style)],
+        [Paragraph("ACTIVE OPERATIONAL PORTFOLIOS", table_cell_style), Paragraph(f"{len(active_branches)} Branches Registered", table_cell_style)]
+    ]
+    perf_table = Table(perf_summary_data, colWidths=[3.75 * inch, 3.75 * inch])
+    perf_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1f77b4")),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN', (0,0), (0,0), 'LEFT'),
-        ('ALIGN', (1,0), (1,0), 'RIGHT'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
-        ('TOPPADDING', (0,0), (-1,-1), 0),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#d3d3d3")),
+        ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#eef4f8")),  # Highlight grand net row
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
     ]))
-    elements.append(chart_table)
-    elements.append(Spacer(1, 10))
+    elements.append(perf_table)
+    elements.append(Spacer(1, 15))
 
-    # --- SECTION 2: AGENCY AND PRODUCT MIX MATRIX (RENAME MATRIX & RETAIN FULL STRUCTURE) ---
-    elements.append(Paragraph("2. Agency and Product Mix Matrix Summary Table", section_style))
+    # --- SECTION 2: AGENCY AND PRODUCT MIX MATRIX WITH ACCENTUATED GRAND TOTALS ---
+    elements.append(Paragraph("2. Agency and Product Mix Matrix", section_style))
     
     global_pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
     for p_col in PRODUCT_ORDER:
@@ -207,11 +154,20 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
     headers = ["Agency", "FSP", "Pedestal", "Niche", "Others", "Total Net Sales", "Corp Net %"]
     table_data = [[Paragraph(h, table_header_style) for h in headers]]
     
+    # Track metrics for structural ultimate column summing
+    col_totals = {"FSP": 0.0, "Pedestal": 0.0, "Niche": 0.0, "Others": 0.0}
+    
     for agency in AGENCY_ORDER:
         fsp = global_pivot.loc[agency, "FSP"]
         ped = global_pivot.loc[agency, "Pedestal"]
         nic = global_pivot.loc[agency, "Niche"]
         oth = global_pivot.loc[agency, "Others"]
+        
+        col_totals["FSP"] += fsp
+        col_totals["Pedestal"] += ped
+        col_totals["Niche"] += nic
+        col_totals["Others"] += oth
+        
         row_tot = fsp + ped + nic + oth
         corp_pct = (row_tot / max(grand_revenue, 1)) * 100
         
@@ -226,6 +182,18 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         ]
         table_data.append(row)
 
+    # ACCENTUATED ULTIMATE GRAND TOTAL ROW
+    grand_row = [
+        Paragraph("<b>GRAND TOTAL</b>", table_cell_bold),
+        Paragraph(f"<b>{format_currency(col_totals['FSP'])}</b>", table_cell_bold),
+        Paragraph(f"<b>{format_currency(col_totals['Pedestal'])}</b>", table_cell_bold),
+        Paragraph(f"<b>{format_currency(col_totals['Niche'])}</b>", table_cell_bold),
+        Paragraph(f"<b>{format_currency(col_totals['Others'])}</b>", table_cell_bold),
+        Paragraph(f"<b>{format_currency(grand_revenue)}</b>", table_cell_bold),
+        Paragraph("<b>100.00%</b>", table_cell_bold)
+    ]
+    table_data.append(grand_row)
+
     col_widths = [1.1*inch, 1.05*inch, 1.05*inch, 1.05*inch, 1.05*inch, 1.2*inch, 1.0*inch]
     global_table = Table(table_data, colWidths=col_widths, repeatRows=1)
     global_table.setStyle(TableStyle([
@@ -233,19 +201,21 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#d3d3d3")),
-        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f9f9f9")]),
+        ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.white, colors.HexColor("#f9f9f9")]),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#eef4f8")), # Visual accentuation highlight formatting
+        ('LINEABOVE', (0,-1), (-1,-1), 1.5, colors.HexColor("#1f77b4")),
         ('BOTTOMPADDING', (0,0), (-1,-1), 5),
         ('TOPPADDING', (0,0), (-1,-1), 5),
     ]))
     elements.append(global_table)
     elements.append(Spacer(1, 15))
 
-    # --- SECTION 3: DETAILED BRANCH BREAKDOWNS (REMOVE LEDGER ENTITY & CONDITIONAL FSP RULES) ---
+    # --- SECTION 3: DETAILED BRANCH BREAKDOWNS ---
     elements.append(Paragraph("3. Operational Branch Breakdowns", section_style))
     for b_name, b_df in active_branches.items():
         b_total = b_df["NETMAINPRODUCT"].sum()
         
-        # Enforce no FSP for LST and TLT branches
+        # Enforce rule: No FSP tracking structures for LST and TLT
         current_branch_products = [p for p in PRODUCT_ORDER if not (b_name in ["LST", "TLT"] and p == "FSP")]
         
         b_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
@@ -259,6 +229,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         b_headers = ["Agency"] + current_branch_products + ["Branch Vol %", "Global Vol %"]
         b_table_data = [[Paragraph(bh, table_header_style) for bh in b_headers]]
         
+        b_col_totals = {p: 0.0 for p in current_branch_products}
         for agency in AGENCY_ORDER:
             row_tot = 0.0
             row = [Paragraph(agency, table_cell_bold)]
@@ -266,6 +237,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             for prod in current_branch_products:
                 val = b_pivot.loc[agency, prod]
                 row_tot += val
+                b_col_totals[prod] += val
                 row.append(Paragraph(format_currency(val), table_cell_style))
                 
             br_vol = (row_tot / max(b_total, 1)) * 100
@@ -275,7 +247,14 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             row.append(Paragraph(format_pct(gl_vol), table_cell_style))
             b_table_data.append(row)
             
-        # Recalculate dynamic column layouts depending on FSP visibility filter
+        # Accentuated Branch Total Row
+        b_grand_row = [Paragraph("<b>TOTAL</b>", table_cell_bold)]
+        for prod in current_branch_products:
+            b_grand_row.append(Paragraph(f"<b>{format_currency(b_col_totals[prod])}</b>", table_cell_bold))
+        b_grand_row.append(Paragraph(f"<b>{format_pct((b_total/max(b_total,1))*100)}</b>", table_cell_bold))
+        b_grand_row.append(Paragraph(f"<b>{format_pct((b_total/max(grand_revenue,1))*100)}</b>", table_cell_bold))
+        b_table_data.append(b_grand_row)
+            
         if b_name in ["LST", "TLT"]:
             b_col_widths = [1.1*inch, 1.3*inch, 1.3*inch, 1.3*inch, 1.25*inch, 1.25*inch]
         else:
@@ -287,7 +266,9 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             ('ALIGN', (0,0), (-1,-1), 'CENTER'),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e2e2e2")),
-            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#fcfcfc")]),
+            ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.white, colors.HexColor("#fcfcfc")]),
+            ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#ebf7eb")),
+            ('LINEABOVE', (0,-1), (-1,-1), 1.2, colors.HexColor("#2ca02c")),
             ('BOTTOMPADDING', (0,0), (-1,-1), 4),
             ('TOPPADDING', (0,0), (-1,-1), 4),
         ]))
@@ -296,7 +277,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         
         elements.append(KeepTogether(branch_elements))
 
-    # --- SECTION 4: SALES CANCELLATION MATRIX (REARRANGEMENT / CLEAN TERMINOLOGY) ---
+    # --- SECTION 4: SALES CANCELLATION MATRIX (REMOVED 'CXL' WORDS & ADDED ULTIMATE TOTALS) ---
     cxl_block = []
     cxl_block.append(Paragraph(f"4. Sales Cancellation Breakdown (Total Deductions: {format_currency(total_deducted)})", cxl_title_style))
     
@@ -308,14 +289,21 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             if p_col not in cxl_pivot.columns: cxl_pivot[p_col] = 0.0
         cxl_pivot = cxl_pivot[PRODUCT_ORDER].reindex(AGENCY_ORDER).fillna(0)
         
-        cxl_headers = ["Agency Matrix", "FSP Cxl", "Pedestal Cxl", "Niche Cxl", "Others Cxl", "Total Rev Voided", "Contribution %"]
+        cxl_headers = ["Agency Matrix", "FSP", "Pedestal", "Niche", "Others", "Total Rev Voided", "Contribution %"]
         cxl_table_data = [[Paragraph(ch, table_header_style) for ch in cxl_headers]]
         
+        c_col_totals = {"FSP": 0.0, "Pedestal": 0.0, "Niche": 0.0, "Others": 0.0}
         for agency in AGENCY_ORDER:
             fsp_c = cxl_pivot.loc[agency, "FSP"]
             ped_c = cxl_pivot.loc[agency, "Pedestal"]
             nic_c = cxl_pivot.loc[agency, "Niche"]
             oth_c = cxl_pivot.loc[agency, "Others"]
+            
+            c_col_totals["FSP"] += fsp_c
+            c_col_totals["Pedestal"] += ped_c
+            c_col_totals["Niche"] += nic_c
+            c_col_totals["Others"] += oth_c
+            
             row_cxl_tot = fsp_c + ped_c + nic_c + oth_c
             risk_pct = (row_cxl_tot / max(total_deducted, 1)) * 100
             
@@ -330,13 +318,27 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             ]
             cxl_table_data.append(row_c)
             
+        # Accentuated Cancellation Grand Row
+        c_grand_row = [
+            Paragraph("<b>TOTAL CANCELLATIONS</b>", table_cell_bold),
+            Paragraph(f"<b>{format_currency(c_col_totals['FSP'])}</b>", table_cell_bold),
+            Paragraph(f"<b>{format_currency(c_col_totals['Pedestal'])}</b>", table_cell_bold),
+            Paragraph(f"<b>{format_currency(c_col_totals['Niche'])}</b>", table_cell_bold),
+            Paragraph(f"<b>{format_currency(c_col_totals['Others'])}</b>", table_cell_bold),
+            Paragraph(f"<b>{format_currency(total_deducted)}</b>", table_cell_bold),
+            Paragraph("<b>100.00%</b>", table_cell_bold)
+        ]
+        cxl_table_data.append(c_grand_row)
+            
         cxl_table = Table(cxl_table_data, colWidths=col_widths, repeatRows=1)
         cxl_table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#d62728")),
             ('ALIGN', (0,0), (-1,-1), 'CENTER'),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#f4c2c2")),
-            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#fff5f5")]),
+            ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.white, colors.HexColor("#fff5f5")]),
+            ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#fdebe8")),
+            ('LINEABOVE', (0,-1), (-1,-1), 1.5, colors.HexColor("#d62728")),
             ('BOTTOMPADDING', (0,0), (-1,-1), 5),
             ('TOPPADDING', (0,0), (-1,-1), 5),
         ]))
@@ -527,7 +529,6 @@ with tabs[0]:
         fig_gap = px.bar(global_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=global_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
         st.plotly_chart(fig_gap, use_container_width=True)
         
-        # --- RENAME IN UI ---
         st.markdown("**Agency and Product Mix Matrix Summary Table**")
         ui_global_pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
         ui_global_pivot = ui_global_pivot.reindex(index=AGENCY_ORDER, columns=PRODUCT_ORDER, fill_value=0)
@@ -554,7 +555,6 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
         if not b_df.empty:
             st.subheader("Branch Performance Breakdown (Visual Chart)")
             
-            # --- FILTER FSP FOR LST & TLT ENTIRELY ---
             branch_agency_prod = b_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
             if b_name in ["LST", "TLT"]:
                 branch_agency_prod = branch_agency_prod[branch_agency_prod["Product_Type"] != "FSP"]
@@ -566,7 +566,6 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
             fig_br_ap = px.bar(branch_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=branch_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
             st.plotly_chart(fig_br_ap, use_container_width=True)
             
-            # --- TABLE MATCHES CORRESPONDING VISUAL EXACTLY ---
             st.markdown(f"**Data Table: {b_name} Branch Breakdown**")
             ui_branch_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
             ui_branch_pivot = ui_branch_pivot.reindex(index=AGENCY_ORDER, columns=current_branch_products, fill_value=0)
