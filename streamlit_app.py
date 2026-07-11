@@ -7,7 +7,7 @@ import traceback
 st.set_page_config(page_title="Multi-Branch Sales Dashboard", layout="wide")
 
 st.title("📊 Sales Dashboard - Multi-Branch Analysis")
-st.markdown("Upload Excel files for **CCK**, **LST**, and **TLT** branches, and log manual cancellations to view updated insights.")
+st.markdown("Upload Excel files for **CCK**, **LST**, and **TLT** branches, and log cancellations to view updated insights.")
 
 # -------------------- CONSTANTS & CONFIG --------------------
 AGENCY_ORDER = ["FGY", "ZB", "APG", "SLA", "JFL", "Others"]
@@ -20,11 +20,6 @@ product_colours = {
     "Niche": "#2ca02c", 
     "Others": "#d62728"
 }
-
-# -------------------- SESSION STATE INITIALISATION --------------------
-# This keeps track of manual cancellations across app re-runs
-if "cancellation_registry" not in st.session_state:
-    st.session_state.cancellation_registry = []
 
 # -------------------- FORMATTING UTILITIES --------------------
 def format_currency(value):
@@ -127,46 +122,59 @@ def process_branch_file(uploaded_file, branch_name):
         st.error(f"Error processing {branch_name} file: {e}")
         return None
 
+def calculate_cancellations_on_the_fly(editor_state):
+    """Calculates cumulative total value of active adjustments inside the matrix workspace on the fly."""
+    if editor_state is None or editor_state.empty:
+        return 0.0
+    
+    # Drop records missing vital financial information 
+    valid_records = editor_state.dropna(subset=["Sales_Amount", "Qty"])
+    if valid_records.empty:
+        return 0.0
+        
+    # Calculate vector product total across rows
+    return (valid_records["Sales_Amount"] * valid_records["Qty"]).sum()
+
 # -------------------- SIDEBAR FILE UPLOADERS --------------------
 st.sidebar.header("📁 Branch File Uploaders")
 cck_file = st.sidebar.file_uploader("Upload CCK Branch Excel", type=["xlsx", "xls"])
 lst_file = st.sidebar.file_uploader("Upload LST Branch Excel", type=["xlsx", "xls"])
 tlt_file = st.sidebar.file_uploader("Upload TLT Branch Excel", type=["xlsx", "xls"])
 
-# -------------------- SIDEBAR CANCELLATION INTERFACE --------------------
+# -------------------- MULTI-ROW SPREADSHEET CANCELLATION INTERFACE --------------------
 st.sidebar.write("---")
-st.sidebar.header("🛑 Manual Cancellation Registry")
+st.sidebar.header("🛑 Batch Cancellation Registry")
+st.sidebar.caption("Click any cell to edit or choose dropdown options. Use the bottom row to paste or add multiple items.")
 
-with st.sidebar.form(key="cancellation_form", clear_on_submit=True):
-    cxl_branch = st.selectbox("Target Branch", BRANCH_OPTIONS)
-    cxl_agency = st.selectbox("Target Agency", AGENCY_ORDER)
-    cxl_product = st.selectbox("Target Product", PRODUCT_ORDER)
-    cxl_amount = st.number_input("Sales Amount per Item ($)", min_value=0.0, step=500.0, format="%.2f")
-    cxl_qty = st.number_input("Cancellation QTY", min_value=1, step=1, value=1)
-    
-    submit_cxl = st.form_submit_button("Log & Submit Cancellation")
-    
-    if submit_cxl:
-        total_deduction = cxl_amount * cxl_qty
-        if total_deduction > 0:
-            st.session_state.cancellation_registry.append({
-                "Branch": cxl_branch,
-                "Agency": cxl_agency,
-                "Product_Type": cxl_product,
-                "Qty": cxl_qty,
-                "Amount": cxl_amount,
-                "Total_Deduction": total_deduction
-            })
-            st.success(f"Log Successful: Deducting {format_currency(total_deduction)} from {cxl_branch} → {cxl_agency} → {cxl_product}!")
-        else:
-            st.warning("Please enter a valid Sales Amount higher than $0.")
+# Establish baseline setup structure inside the tracking dictionary
+if "editor_data" not in st.session_state:
+    st.session_state.editor_data = pd.DataFrame([
+        {"Branch": "LST", "Agency": "FGY", "Product_Type": "Niche", "Sales_Amount": 30000.0, "Qty": 2}
+    ])
 
-# Clear Button to wipe logged records if needed
-if st.session_state.cancellation_registry:
-    if st.sidebar.button("Wipe & Reset All Logged Cancellations"):
-        st.session_state.cancellation_registry = []
-        st.sidebar.success("Cancellation history cleared!")
-        st.rerun()
+# Render interactive spreadsheet inside sidebar container 
+edited_cxl_df = st.sidebar.data_editor(
+    st.session_state.editor_data,
+    num_rows="dynamic",
+    column_config={
+        "Branch": st.column_config.SelectboxColumn("Branch", options=BRANCH_OPTIONS, required=True),
+        "Agency": st.column_config.SelectboxColumn("Agency", options=AGENCY_ORDER, required=True),
+        "Product_Type": st.column_config.SelectboxColumn("Product Type", options=PRODUCT_ORDER, required=True),
+        "Sales_Amount": st.column_config.NumberColumn("Amount ($)", min_value=0.0, format="$%.2f", required=True),
+        "Qty": st.column_config.NumberColumn("QTY", min_value=1, step=1, default=1, required=True),
+    },
+    hide_index=True,
+    use_container_width=True,
+    key="batch_cxl_editor"
+)
+
+# Call the computation engine to display values on the fly
+pending_total_deduction = calculate_cancellations_on_the_fly(edited_cxl_df)
+st.sidebar.metric(
+    label="Estimated Active Deductions (On-the-Fly)", 
+    value=format_currency(pending_total_deduction),
+    help="Live monitoring showing total calculated value across the workspace grid before data frame application."
+)
 
 # -------------------- PROCESS BRANCH FILES --------------------
 branch_dfs = {}
@@ -186,12 +194,18 @@ if not active_branches:
 # Consolidate raw uploaded data
 total_df = pd.concat(active_branches.values(), ignore_index=True)
 
-# -------------------- APPLY ATTRIBUTE-BASED DEDUCTIONS --------------------
+# -------------------- APPLY BATCH ATTRIBUTE-BASED DEDUCTIONS --------------------
 total_deducted_amount = 0.0
 
-if st.session_state.cancellation_registry:
-    for item in st.session_state.cancellation_registry:
-        total_deducted_amount += item["Total_Deduction"]
+if edited_cxl_df is not None and not edited_cxl_df.empty:
+    valid_cxl_df = edited_cxl_df.dropna(subset=["Branch", "Agency", "Product_Type", "Sales_Amount", "Qty"])
+    
+    for _, item in valid_cxl_df.iterrows():
+        row_deduction = item["Sales_Amount"] * item["Qty"]
+        if row_deduction <= 0:
+            continue
+            
+        total_deducted_amount += row_deduction
         
         # Locate the structural intersections in our primary dataframe pool
         mask = (
@@ -205,17 +219,15 @@ if st.session_state.cancellation_registry:
         if not matching_rows.empty:
             # Sort matching rows lowest-value first to systematically chip away at total deduction target
             matching_indices = matching_rows.sort_values(by="NETMAINPRODUCT").index
-            deduction_left = item["Total_Deduction"]
+            deduction_left = row_deduction
             
             for idx in matching_indices:
                 current_val = total_df.at[idx, "NETMAINPRODUCT"]
                 
                 if current_val <= deduction_left:
-                    # Wipe out/zero this row entirely since its value is less than or equal to what remains
                     deduction_left -= current_val
                     total_df.at[idx, "NETMAINPRODUCT"] = 0.0
                 else:
-                    # Subtract the remaining deduction from this row's ledger entry and terminate row loop
                     total_df.at[idx, "NETMAINPRODUCT"] = current_val - deduction_left
                     deduction_left = 0.0
                     break
@@ -229,11 +241,12 @@ if st.session_state.cancellation_registry:
 
 grand_corporate_revenue = total_df['NETMAINPRODUCT'].sum()
 
-# -------------------- SHOW ACTIVE MANUAL CANCELLATIONS TABLE --------------------
-if st.session_state.cancellation_registry:
-    with st.expander("📄 Active Cancellation Audit Registry Matrix", expanded=False):
-        audit_df = pd.DataFrame(st.session_state.cancellation_registry)
-        display_audit = format_currency_df(audit_df, ["Amount", "Total_Deduction"])
+# -------------------- SHOW ACTIVE MANUAL CANCELLATIONS AUDIT TABLE --------------------
+if total_deducted_amount > 0:
+    with st.expander("📄 Batch Cancellation Audit Registry Matrix", expanded=False):
+        audit_copy = edited_cxl_df.copy()
+        audit_copy["Total_Deduction"] = audit_copy["Sales_Amount"] * audit_copy["Qty"]
+        display_audit = format_currency_df(audit_copy, ["Sales_Amount", "Total_Deduction"])
         st.dataframe(display_audit, use_container_width=True, hide_index=True)
 
 # -------------------- BUILD TABS --------------------
