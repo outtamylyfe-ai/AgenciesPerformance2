@@ -117,40 +117,31 @@ def process_branch_file(uploaded_file, branch_name):
 
 
 def process_cancellation_file(uploaded_file):
-    """Extract cancellation file number and its respective Column C value dynamically."""
+    """Extract cancellation data using strictly positional index columns (Col A & Col C)."""
     try:
-        df_raw = pd.read_excel(uploaded_file, header=None)
-        header_row_idx = None
-        for idx, row in df_raw.iterrows():
-            if row.astype(str).str.contains("FILE_NO").any():
-                header_row_idx = idx
-                break
-        if header_row_idx is None:
-            return None
-
-        # Read layout with discovered headers
-        df = pd.read_excel(uploaded_file, header=header_row_idx)
-        raw_cols = list(df.columns)
+        # Read without headers to capture pure positional column indexes
+        df = pd.read_excel(uploaded_file, header=None)
         
-        if "FILE_NO" not in raw_cols:
-            st.error("The Cancellation sheet must contain a 'FILE_NO' column.")
+        if df.shape[1] < 3:
+            st.error("The Cancellation sheet requires at least 3 columns (Column A for FILE_NO, Column C for Amount).")
             return None
             
-        # Target Column C dynamically by positional index (0-indexed column 2)
-        if len(raw_cols) < 3:
-            st.error("The Cancellation sheet is missing Column C for Deduction Amounts.")
-            return None
-            
-        amt_col_name = raw_cols[2] # Pulls whatever Column C is titled
+        # Select Index 0 (Column A) and Index 2 (Column C)
+        df_clean = df[[0, 2]].dropna().copy()
+        df_clean.columns = ["FILE_NO", "CXL_AMT"]
         
-        # Clean down structural features
-        df = df[["FILE_NO", amt_col_name]].dropna(subset=["FILE_NO"]).copy()
-        df["FILE_NO"] = df["FILE_NO"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        # Format file numbers into standardized strings
+        df_clean["FILE_NO"] = df_clean["FILE_NO"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         
-        # Coerce column C into a clean number format, summing up values if a single file has multiple entries
-        df["CXL_AMT"] = pd.to_numeric(df[amt_col_name], errors="coerce").fillna(0.0)
-        df_summary = df.groupby("FILE_NO")["CXL_AMT"].sum().reset_index()
+        # Strip out the table header labels if they were included in the raw read
+        df_clean = df_clean[~df_clean["FILE_NO"].str.contains("FILE", case=False, na=False)]
         
+        # Quantify target amounts accurately
+        df_clean["CXL_AMT"] = pd.to_numeric(df_clean["CXL_AMT"], errors="coerce")
+        df_clean = df_clean.dropna(subset=["CXL_AMT"])
+        
+        # Aggregate duplicates to avoid multiple lookup row bloat
+        df_summary = df_clean.groupby("FILE_NO")["CXL_AMT"].sum().reset_index()
         return df_summary
 
     except Exception as e:
@@ -187,29 +178,36 @@ if not active_branches:
 total_df = pd.concat(active_branches.values(), ignore_index=True)
 
 # -------------------- APPLY CANCELLATIONS --------------------
+cxl_count = 0
 total_deducted_amount = 0.0
+
 if cxl_file:
-    with st.spinner("Calculating and applying currency deductions..."):
+    with st.spinner("Executing structural record drops..."):
         df_cxl = process_cancellation_file(cxl_file)
         if df_cxl is not None and not df_cxl.empty:
             total_df["FILE_NO"] = total_df["FILE_NO"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
-            # Left join to append the cancellation values side-by-side
-            total_df = total_df.merge(df_cxl, on="FILE_NO", how="left")
-            total_df["CXL_AMT"] = total_df["CXL_AMT"].fillna(0.0)
+            # Generate binary match layout series
+            cxl_mask = total_df["FILE_NO"].isin(df_cxl["FILE_NO"])
+            cxl_count = cxl_mask.sum()
+            
+            # Extract tracking total value of rows dropped
+            total_deducted_amount = df_cxl["CXL_AMT"].sum()
 
-            # Track total amount processed for the metric panel display
-            total_deducted_amount = total_df["CXL_AMT"].sum()
+            # COMPLETELY DELETE THE ENTIRE ROW (Wipes out Agency, Product type mix metrics, and values together)
+            total_df = total_df[~cxl_mask].copy()
 
-            # The Core Deduction Step: Subtract Column C directly from the original sales revenue metric
-            total_df["NETMAINPRODUCT"] = total_df["NETMAINPRODUCT"] - total_df["CXL_AMT"]
+            del df_cxl
 
-            # Remove column reference to avoid bloating downstream processing tasks
-            total_df = total_df.drop(columns=["CXL_AMT"])
-
-            # Re-update local branch dictionary splits with the newly modified amounts
+            # Update the branch tracking dictionaries
             for name in list(active_branches.keys()):
                 active_branches[name] = total_df[total_df["Branch"] == name].copy()
+                if active_branches[name].empty:
+                    del active_branches[name]
+
+            if total_df.empty:
+                st.warning("⚠️ Deductions successfully applied! All data from uploaded branches was cancelled out by the cancellation register records.")
+                st.stop()
 
 grand_corporate_revenue = total_df['NETMAINPRODUCT'].sum()
 
@@ -225,7 +223,7 @@ with tabs[0]:
     c1.metric("Total Net Combined Sales", format_currency(grand_corporate_revenue))
     c2.metric("Active Operating Branches", len(active_branches))
     if cxl_file and total_deducted_amount > 0:
-        c3.metric("Net Confirmed Transactions", f"{len(total_df):,}", delta=f"-{format_currency(total_deducted_amount)} Deducted", delta_color="inverse")
+        c3.metric("Net Confirmed Transactions", f"{len(total_df):,}", delta=f"-{format_currency(total_deducted_amount)} Cancelled", delta_color="inverse")
     else:
         c3.metric("Total Confirmed Transactions", f"{len(total_df):,}")
 
