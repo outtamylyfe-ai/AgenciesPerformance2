@@ -196,8 +196,8 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
     elements.append(chart_table)
     elements.append(Spacer(1, 10))
 
-    # --- SECTION 2: REVENUE DATA TABLE (IMMEDIATELY FOLLOWS VISUALISATIONS) ---
-    elements.append(Paragraph("2. Net Corporate Revenue Matrix Summary Table", section_style))
+    # --- SECTION 2: AGENCY AND PRODUCT MIX MATRIX (RENAME MATRIX & RETAIN FULL STRUCTURE) ---
+    elements.append(Paragraph("2. Agency and Product Mix Matrix Summary Table", section_style))
     
     global_pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
     for p_col in PRODUCT_ORDER:
@@ -240,43 +240,48 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
     elements.append(global_table)
     elements.append(Spacer(1, 15))
 
-    # --- SECTION 3: DETAILED BRANCH BREAKDOWNS ---
-    elements.append(Paragraph("3. Operational Branch Matrices Breakdowns", section_style))
+    # --- SECTION 3: DETAILED BRANCH BREAKDOWNS (REMOVE LEDGER ENTITY & CONDITIONAL FSP RULES) ---
+    elements.append(Paragraph("3. Operational Branch Breakdowns", section_style))
     for b_name, b_df in active_branches.items():
         b_total = b_df["NETMAINPRODUCT"].sum()
+        
+        # Enforce no FSP for LST and TLT branches
+        current_branch_products = [p for p in PRODUCT_ORDER if not (b_name in ["LST", "TLT"] and p == "FSP")]
+        
         b_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
-        for col in PRODUCT_ORDER:
+        for col in current_branch_products:
             if col not in b_pivot.columns: b_pivot[col] = 0.0
-        b_pivot = b_pivot[PRODUCT_ORDER].reindex(AGENCY_ORDER).fillna(0)
+        b_pivot = b_pivot[current_branch_products].reindex(AGENCY_ORDER).fillna(0)
         
         branch_elements = []
-        branch_elements.append(Paragraph(f"Branch Ledger Entity: {b_name} (Net Portfolio Revenue: {format_currency(b_total)})", ParagraphStyle('BName', fontName='Helvetica-Bold', fontSize=10, spaceBefore=6, spaceAfter=4, textColor=colors.HexColor("#333333"))))
+        branch_elements.append(Paragraph(f"Branch: {b_name} (Net Portfolio Revenue: {format_currency(b_total)})", ParagraphStyle('BName', fontName='Helvetica-Bold', fontSize=10, spaceBefore=6, spaceAfter=4, textColor=colors.HexColor("#333333"))))
         
-        b_headers = ["Agency", "FSP", "Pedestal", "Niche", "Others", "Branch Vol %", "Global Vol %"]
+        b_headers = ["Agency"] + current_branch_products + ["Branch Vol %", "Global Vol %"]
         b_table_data = [[Paragraph(bh, table_header_style) for bh in b_headers]]
         
         for agency in AGENCY_ORDER:
-            fsp = b_pivot.loc[agency, "FSP"]
-            ped = b_pivot.loc[agency, "Pedestal"]
-            nic = b_pivot.loc[agency, "Niche"]
-            oth = b_pivot.loc[agency, "Others"]
-            row_tot = fsp + ped + nic + oth
+            row_tot = 0.0
+            row = [Paragraph(agency, table_cell_bold)]
             
+            for prod in current_branch_products:
+                val = b_pivot.loc[agency, prod]
+                row_tot += val
+                row.append(Paragraph(format_currency(val), table_cell_style))
+                
             br_vol = (row_tot / max(b_total, 1)) * 100
             gl_vol = (row_tot / max(grand_revenue, 1)) * 100
             
-            row = [
-                Paragraph(agency, table_cell_bold),
-                Paragraph(format_currency(fsp), table_cell_style),
-                Paragraph(format_currency(ped), table_cell_style),
-                Paragraph(format_currency(nic), table_cell_style),
-                Paragraph(format_currency(oth), table_cell_style),
-                Paragraph(format_pct(br_vol), table_cell_style),
-                Paragraph(format_pct(gl_vol), table_cell_style)
-            ]
+            row.append(Paragraph(format_pct(br_vol), table_cell_style))
+            row.append(Paragraph(format_pct(gl_vol), table_cell_style))
             b_table_data.append(row)
             
-        branch_table = Table(b_table_data, colWidths=col_widths, repeatRows=1)
+        # Recalculate dynamic column layouts depending on FSP visibility filter
+        if b_name in ["LST", "TLT"]:
+            b_col_widths = [1.1*inch, 1.3*inch, 1.3*inch, 1.3*inch, 1.25*inch, 1.25*inch]
+        else:
+            b_col_widths = [1.1*inch, 1.05*inch, 1.05*inch, 1.05*inch, 1.05*inch, 1.2*inch, 1.0*inch]
+            
+        branch_table = Table(b_table_data, colWidths=b_col_widths, repeatRows=1)
         branch_table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2ca02c")),
             ('ALIGN', (0,0), (-1,-1), 'CENTER'),
@@ -291,19 +296,19 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         
         elements.append(KeepTogether(branch_elements))
 
-    # --- SECTION 4: SALES CANCELLATION MATRIX (MOVED TO FINAL REAR POSITION) ---
+    # --- SECTION 4: SALES CANCELLATION MATRIX (REARRANGEMENT / CLEAN TERMINOLOGY) ---
     cxl_block = []
-    cxl_block.append(Paragraph(f"4. Risk Ledger: Sales Cancellation Breakdown (Total Clawback: {format_currency(total_deducted)})", cxl_title_style))
+    cxl_block.append(Paragraph(f"4. Sales Cancellation Breakdown (Total Deductions: {format_currency(total_deducted)})", cxl_title_style))
     
     if valid_cxl_df.empty:
-        cxl_block.append(Paragraph("<i>No cancellation or margin risk rows registered inside this fiscal cycle workbook.</i>", table_cell_style))
+        cxl_block.append(Paragraph("<i>No cancellation rows registered inside this fiscal cycle workbook.</i>", table_cell_style))
     else:
         cxl_pivot = valid_cxl_df.pivot_table(index="Agency", columns="Product_Type", values="Sales_Amount", aggfunc="sum", fill_value=0)
         for p_col in PRODUCT_ORDER:
             if p_col not in cxl_pivot.columns: cxl_pivot[p_col] = 0.0
         cxl_pivot = cxl_pivot[PRODUCT_ORDER].reindex(AGENCY_ORDER).fillna(0)
         
-        cxl_headers = ["Agency Matrix", "FSP Cxl", "Pedestal Cxl", "Niche Cxl", "Others Cxl", "Total Rev Voided", "Risk Cont. %"]
+        cxl_headers = ["Agency Matrix", "FSP Cxl", "Pedestal Cxl", "Niche Cxl", "Others Cxl", "Total Rev Voided", "Contribution %"]
         cxl_table_data = [[Paragraph(ch, table_header_style) for ch in cxl_headers]]
         
         for agency in AGENCY_ORDER:
@@ -512,7 +517,7 @@ with tabs[0]:
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Net Combined Sales", format_currency(grand_corporate_revenue))
     c2.metric("Active Operating Branches", len(active_branches))
-    c3.metric("Total Value Clawed Back", format_currency(total_deducted_amount))
+    c3.metric("Total Value Deducted", format_currency(total_deducted_amount))
     
     st.write("---")
     st.subheader("Overall Net Performance by Agency Hierarchy (Visual Chart)")
@@ -522,8 +527,8 @@ with tabs[0]:
         fig_gap = px.bar(global_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=global_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
         st.plotly_chart(fig_gap, use_container_width=True)
         
-        # --- DATA TABLE DIRECTLY UNDER VISUALISATION ---
-        st.markdown("**Data Table: Performance by Agency Hierarchy**")
+        # --- RENAME IN UI ---
+        st.markdown("**Agency and Product Mix Matrix Summary Table**")
         ui_global_pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
         ui_global_pivot = ui_global_pivot.reindex(index=AGENCY_ORDER, columns=PRODUCT_ORDER, fill_value=0)
         ui_global_pivot["Total Revenue"] = ui_global_pivot.sum(axis=1)
@@ -535,7 +540,6 @@ with tabs[0]:
         fig_p = px.pie(prod_sum, names="Product_Type", values="NETMAINPRODUCT", hole=0.3, color="Product_Type", color_discrete_map=product_colours)
         st.plotly_chart(fig_p, use_container_width=True)
         
-        # --- DATA TABLE DIRECTLY UNDER VISUALISATION ---
         st.markdown("**Data Table: Portfolio Share Breakdown**")
         prod_sum_display = prod_sum.copy()
         prod_sum_display["Contribution %"] = (prod_sum_display["NETMAINPRODUCT"] / max(grand_corporate_revenue, 1)) * 100
@@ -549,14 +553,22 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
         st.header(f"📍 Operational Analysis: {b_name} Branch")
         if not b_df.empty:
             st.subheader("Branch Performance Breakdown (Visual Chart)")
+            
+            # --- FILTER FSP FOR LST & TLT ENTIRELY ---
             branch_agency_prod = b_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
+            if b_name in ["LST", "TLT"]:
+                branch_agency_prod = branch_agency_prod[branch_agency_prod["Product_Type"] != "FSP"]
+                current_branch_products = [p for p in PRODUCT_ORDER if p != "FSP"]
+            else:
+                current_branch_products = PRODUCT_ORDER
+
             branch_agency_prod = sort_by_corporate_hierarchy(branch_agency_prod, "Agency")
             fig_br_ap = px.bar(branch_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=branch_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
             st.plotly_chart(fig_br_ap, use_container_width=True)
             
-            # --- DATA TABLE DIRECTLY UNDER VISUALISATION ---
+            # --- TABLE MATCHES CORRESPONDING VISUAL EXACTLY ---
             st.markdown(f"**Data Table: {b_name} Branch Breakdown**")
             ui_branch_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
-            ui_branch_pivot = ui_branch_pivot.reindex(index=AGENCY_ORDER, columns=PRODUCT_ORDER, fill_value=0)
+            ui_branch_pivot = ui_branch_pivot.reindex(index=AGENCY_ORDER, columns=current_branch_products, fill_value=0)
             ui_branch_pivot["Branch Total"] = ui_branch_pivot.sum(axis=1)
-            st.dataframe(format_currency_df(ui_branch_pivot.reset_index(), PRODUCT_ORDER + ["Branch Total"]), use_container_width=True, hide_index=True)
+            st.dataframe(format_currency_df(ui_branch_pivot.reset_index(), current_branch_products + ["Branch Total"]), use_container_width=True, hide_index=True)
