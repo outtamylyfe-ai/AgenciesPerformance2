@@ -16,12 +16,13 @@ from reportlab.pdfgen import canvas
 st.set_page_config(page_title="Multi-Branch Sales Dashboard", layout="wide")
 
 st.title("📊 Sales Dashboard - Multi-Branch Analysis")
-st.markdown("Upload Excel files for **CCK**, **LST**, and **TLT** branches, and download structured executive PDF reports.")
+st.markdown("Upload Excel files for **CCK**, **LST**, and **TLT** branches, and download structured executive PDF reports with monthly insights.")
 
 # -------------------- CONSTANTS & CONFIG --------------------
 AGENCY_ORDER = ["FGY", "ZB", "APG", "SLA", "JFL", "Others"]
 PRODUCT_ORDER = ["FSP", "Pedestal", "Niche", "Others"]
 BRANCH_OPTIONS = ["CCK", "LST", "TLT"]
+MONTH_ORDER = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
 product_colours = {
     "FSP": "#1f77b4", 
@@ -55,6 +56,10 @@ def format_pct(value):
 def sort_by_corporate_hierarchy(df, agency_col="Agency"):
     df[agency_col] = pd.Categorical(df[agency_col], categories=AGENCY_ORDER, ordered=True)
     return df.sort_values(agency_col)
+
+def sort_by_month(df, month_col="Month"):
+    df[month_col] = pd.Categorical(df[month_col], categories=MONTH_ORDER, ordered=True)
+    return df.sort_values(month_col)
 
 # -------------------- NATIVE PDF REPORT ENGINE --------------------
 class NumberedCanvas(canvas.Canvas):
@@ -273,11 +278,39 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             ('TOPPADDING', (0,0), (-1,-1), 4),
         ]))
         branch_elements.append(branch_table)
-        branch_elements.append(Spacer(1, 10))
+        
+        # --- SUB-SECTION: MONTHLY TREND WITHOUT PRODUCT MIX ---
+        branch_elements.append(Spacer(1, 4))
+        b_month_df = b_df.groupby("Month")["NETMAINPRODUCT"].sum().reset_index()
+        b_month_df = sort_by_month(b_month_df, "Month")
+        
+        bm_headers = ["Month Cycle Period", "Net Branch Revenue", "Branch Allocation %"]
+        bm_table_data = [[Paragraph(bmh, table_header_style) for bmh in bm_headers]]
+        
+        for _, m_row in b_month_df.iterrows():
+            m_val = m_row["NETMAINPRODUCT"]
+            m_pct = (m_val / max(b_total, 1)) * 100
+            bm_table_data.append([
+                Paragraph(str(m_row["Month"]), table_cell_style),
+                Paragraph(format_currency(m_val), table_cell_style),
+                Paragraph(format_pct(m_pct), table_cell_style)
+            ])
+            
+        bm_table = Table(bm_table_data, colWidths=[2.5 * inch, 2.5 * inch, 2.5 * inch])
+        bm_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#7f7f7f")),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e2e2e2")),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+            ('TOPPADDING', (0,0), (-1,-1), 3),
+        ]))
+        branch_elements.append(bm_table)
+        branch_elements.append(Spacer(1, 12))
         
         elements.append(KeepTogether(branch_elements))
 
-    # --- SECTION 4: SALES CANCELLATION MATRIX (REMOVED 'CXL' WORDS & ADDED ULTIMATE TOTALS) ---
+    # --- SECTION 4: SALES CANCELLATION MATRIX ---
     cxl_block = []
     cxl_block.append(Paragraph(f"4. Sales Cancellation Breakdown (Total Deductions: {format_currency(total_deducted)})", cxl_title_style))
     
@@ -365,6 +398,10 @@ def process_branch_file(uploaded_file, branch_name):
 
         required_cols = ["STATUS", "NETMAINPRODUCT", "CBDD_NAME", "BDD_NAME", "PRODUCT_CODE"]
         if any(col not in df.columns for col in required_cols): return None
+
+        # Dynamically map the 6th Excel column (Column F -> index 5)
+        df['Month'] = pd.to_datetime(df.iloc[:, 5], errors='coerce').dt.strftime('%B')
+        df['Month'] = df['Month'].fillna('Unknown')
 
         df["NETMAINPRODUCT"] = pd.to_numeric(df["NETMAINPRODUCT"], errors="coerce")
         df_confirmed = df[df["STATUS"].str.upper() == "CONFIRM"].copy()
@@ -553,21 +590,46 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
     with tabs[idx]:
         st.header(f"📍 Operational Analysis: {b_name} Branch")
         if not b_df.empty:
-            st.subheader("Branch Performance Breakdown (Visual Chart)")
+            # Layout splitting: Product Mix on left, New Monthly Metric Breakdown on right
+            left_col, right_col = st.columns([3, 2])
             
-            branch_agency_prod = b_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
-            if b_name in ["LST", "TLT"]:
-                branch_agency_prod = branch_agency_prod[branch_agency_prod["Product_Type"] != "FSP"]
-                current_branch_products = [p for p in PRODUCT_ORDER if p != "FSP"]
-            else:
-                current_branch_products = PRODUCT_ORDER
+            with left_col:
+                st.subheader("Branch Performance Breakdown (Visual Chart)")
+                branch_agency_prod = b_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
+                if b_name in ["LST", "TLT"]:
+                    branch_agency_prod = branch_agency_prod[branch_agency_prod["Product_Type"] != "FSP"]
+                    current_branch_products = [p for p in PRODUCT_ORDER if p != "FSP"]
+                else:
+                    current_branch_products = PRODUCT_ORDER
 
-            branch_agency_prod = sort_by_corporate_hierarchy(branch_agency_prod, "Agency")
-            fig_br_ap = px.bar(branch_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=branch_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
-            st.plotly_chart(fig_br_ap, use_container_width=True)
-            
-            st.markdown(f"**Data Table: {b_name} Branch Breakdown**")
-            ui_branch_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
-            ui_branch_pivot = ui_branch_pivot.reindex(index=AGENCY_ORDER, columns=current_branch_products, fill_value=0)
-            ui_branch_pivot["Branch Total"] = ui_branch_pivot.sum(axis=1)
-            st.dataframe(format_currency_df(ui_branch_pivot.reset_index(), current_branch_products + ["Branch Total"]), use_container_width=True, hide_index=True)
+                branch_agency_prod = sort_by_corporate_hierarchy(branch_agency_prod, "Agency")
+                fig_br_ap = px.bar(branch_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=branch_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
+                st.plotly_chart(fig_br_ap, use_container_width=True)
+                
+                st.markdown(f"**Data Table: {b_name} Product Matrix**")
+                ui_branch_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
+                ui_branch_pivot = ui_branch_pivot.reindex(index=AGENCY_ORDER, columns=current_branch_products, fill_value=0)
+                ui_branch_pivot["Branch Total"] = ui_branch_pivot.sum(axis=1)
+                st.dataframe(format_currency_df(ui_branch_pivot.reset_index(), current_branch_products + ["Branch Total"]), use_container_width=True, hide_index=True)
+
+            with right_col:
+                st.subheader("Monthly Revenue Net Run-Rate")
+                branch_monthly = b_df.groupby("Month")["NETMAINPRODUCT"].sum().reset_index()
+                branch_monthly = sort_by_month(branch_monthly, "Month")
+                
+                # Visual continuous line chart representing the monthly net run-rate trend
+                fig_month = px.line(branch_monthly, x="Month", y="NETMAINPRODUCT", markers=True, text=branch_monthly["NETMAINPRODUCT"].apply(format_chart_label), labels={"NETMAINPRODUCT": "Net Sales ($)"})
+                fig_month.update_traces(textposition="top center", line_color="#1f77b4")
+                st.plotly_chart(fig_month, use_container_width=True)
+                
+                st.markdown(f"**Data Table: Chronological Cycles Overview**")
+                st.dataframe(format_currency_df(branch_monthly, ["NETMAINPRODUCT"]), use_container_width=True, hide_index=True)
+
+### `requirements.txt`
+
+```text
+streamlit>=1.35.0
+pandas>=2.0.0
+plotly>=5.15.0
+reportlab>=4.0.0
+openpyxl>=3.1.0
