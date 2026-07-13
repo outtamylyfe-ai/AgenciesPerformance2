@@ -264,8 +264,8 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             b_col_widths = [1.1*inch, 0.9*inch, 0.9*inch, 0.9*inch, 0.9*inch, 1.1*inch, 1.0*inch, 1.0*inch]
             
         branch_table = Table(b_table_data, colWidths=b_col_widths, repeatRows=1)
+        # --- FIXED SYNTAX TYPO ('BACKGROUND', (0,0), Hand=... ) HERE ---
         branch_table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), Hand=colors.HexColor("#2ca02c")),
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2ca02c")),
             ('ALIGN', (0,0), (-1,-1), 'CENTER'),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -560,17 +560,15 @@ with tabs[0]:
         global_agency_prod = total_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
         global_agency_prod = sort_by_corporate_hierarchy(global_agency_prod, "Agency")
         fig_gap = px.bar(global_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=global_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
-        st.plotly_chart(fig_gap, width="stretch")
+        st.plotly_chart(fig_gap, use_container_width=True)
         
         st.markdown("**Agency and Product Mix Matrix Summary Table**")
         ui_global_pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
         ui_global_pivot = ui_global_pivot.reindex(index=AGENCY_ORDER, columns=PRODUCT_ORDER, fill_value=0)
         
-        # Calculate row totals for UI view
         ui_global_pivot["Total Revenue"] = ui_global_pivot.sum(axis=1)
         ui_global_pivot = ui_global_pivot.reset_index()
         
-        # Generate summary sum bottom row explicitly
         totals_row = {"Agency": "TOTAL"}
         for p in PRODUCT_ORDER:
             totals_row[p] = ui_global_pivot[p].sum()
@@ -583,7 +581,7 @@ with tabs[0]:
         st.subheader("Overall Portfolio Share Mix (Visual Chart)")
         prod_sum = total_df.groupby("Product_Type")["NETMAINPRODUCT"].sum().reset_index()
         fig_p = px.pie(prod_sum, names="Product_Type", values="NETMAINPRODUCT", hole=0.3, color="Product_Type", color_discrete_map=product_colours)
-        st.plotly_chart(fig_p, width="stretch")
+        st.plotly_chart(fig_p, use_container_width=True)
         
         st.markdown("**Data Table: Portfolio Share Breakdown**")
         prod_sum_display = prod_sum.copy()
@@ -610,13 +608,12 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
 
                 branch_agency_prod = sort_by_corporate_hierarchy(branch_agency_prod, "Agency")
                 fig_br_ap = px.bar(branch_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=branch_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
-                st.plotly_chart(fig_br_ap, width="stretch")
+                st.plotly_chart(fig_br_ap, use_container_width=True)
                 
                 st.markdown(f"**Data Table: {b_name} Product Matrix**")
                 ui_branch_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
                 ui_branch_pivot = ui_branch_pivot.reindex(index=AGENCY_ORDER, columns=current_branch_products, fill_value=0)
                 
-                # Append explicit row-totals and column-totals for the specific Branch UI table view
                 ui_branch_pivot["Branch Total"] = ui_branch_pivot.sum(axis=1)
                 ui_branch_pivot = ui_branch_pivot.reset_index()
                 
@@ -629,21 +626,28 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
                 st.dataframe(format_currency_df(ui_branch_pivot, current_branch_products + ["Branch Total"]), width="stretch", hide_index=True)
 
             with right_col:
-                st.subheader("Monthly Revenue Trends")
+                # --- FIXED LINE GRAPH SNIPPET INTEGRATED HERE ---
+                st.subheader("Monthly Revenue Net Run-Rate")
                 branch_monthly = b_df.groupby("Month")["NETMAINPRODUCT"].sum().reset_index()
                 branch_monthly = sort_by_month(branch_monthly, "Month")
-                
+
                 if not branch_monthly.empty:
-                    fig_monthly = px.line(
+                    fig_month = px.line(
                         branch_monthly, 
                         x="Month", 
                         y="NETMAINPRODUCT", 
-                        markers=True,
-                        line_shape="linear",
+                        markers=True, 
                         labels={"NETMAINPRODUCT": "Net Sales ($)", "Month": "Fiscal Period"}
                     )
-                    fig_monthly.update_traces(line_color="#1f77b4", marker=dict(size=8))
-                    st.plotly_chart(fig_monthly, width="stretch")
+                    
+                    fig_month.update_traces(
+                        text=branch_monthly["NETMAINPRODUCT"].apply(format_chart_label),
+                        textposition="top center", 
+                        line_color="#1f77b4",
+                        marker=dict(size=7)
+                    )
+                    
+                    st.plotly_chart(fig_month, use_container_width=True)
                     
                     st.markdown("**Monthly Distribution Summary**")
                     branch_monthly_display = branch_monthly.copy()
