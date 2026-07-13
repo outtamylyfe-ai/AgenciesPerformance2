@@ -126,7 +126,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
     elements.append(Paragraph(f"Active Portfolios Assessment | Executive Workbook Summary", subtitle_style))
     elements.append(Spacer(1, 5))
 
-    # --- SECTION 1: ACCENTUATED OVERALL PERFORMANCE HIGHLIGHTS ---
+    # --- SECTION 1: PERFORMANCE HIGHLIGHTS ---
     elements.append(Paragraph("1. Executive Summary & Core Financial Positions", section_style))
     
     perf_summary_data = [
@@ -141,14 +141,14 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         ('ALIGN', (0,0), (-1,-1), 'LEFT'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#d3d3d3")),
-        ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#eef4f8")),  # Highlight grand net row
+        ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#eef4f8")),
         ('BOTTOMPADDING', (0,0), (-1,-1), 6),
         ('TOPPADDING', (0,0), (-1,-1), 6),
     ]))
     elements.append(perf_table)
     elements.append(Spacer(1, 15))
 
-    # --- SECTION 2: AGENCY AND PRODUCT MIX MATRIX WITH ACCENTUATED GRAND TOTALS ---
+    # --- SECTION 2: AGENCY AND PRODUCT MIX ---
     elements.append(Paragraph("2. Agency and Product Mix Matrix", section_style))
     
     global_pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
@@ -159,7 +159,6 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
     headers = ["Agency", "FSP", "Pedestal", "Niche", "Others", "Total Net Sales", "Corp Net %"]
     table_data = [[Paragraph(h, table_header_style) for h in headers]]
     
-    # Track metrics for structural ultimate column summing
     col_totals = {"FSP": 0.0, "Pedestal": 0.0, "Niche": 0.0, "Others": 0.0}
     
     for agency in AGENCY_ORDER:
@@ -187,7 +186,6 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         ]
         table_data.append(row)
 
-    # ACCENTUATED ULTIMATE GRAND TOTAL ROW
     grand_row = [
         Paragraph("<b>GRAND TOTAL</b>", table_cell_bold),
         Paragraph(f"<b>{format_currency(col_totals['FSP'])}</b>", table_cell_bold),
@@ -207,7 +205,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#d3d3d3")),
         ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.white, colors.HexColor("#f9f9f9")]),
-        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#eef4f8")), # Visual accentuation highlight formatting
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#eef4f8")),
         ('LINEABOVE', (0,-1), (-1,-1), 1.5, colors.HexColor("#1f77b4")),
         ('BOTTOMPADDING', (0,0), (-1,-1), 5),
         ('TOPPADDING', (0,0), (-1,-1), 5),
@@ -220,7 +218,6 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
     for b_name, b_df in active_branches.items():
         b_total = b_df["NETMAINPRODUCT"].sum()
         
-        # Enforce rule: No FSP tracking structures for LST and TLT
         current_branch_products = [p for p in PRODUCT_ORDER if not (b_name in ["LST", "TLT"] and p == "FSP")]
         
         b_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
@@ -252,7 +249,6 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             row.append(Paragraph(format_pct(gl_vol), table_cell_style))
             b_table_data.append(row)
             
-        # Accentuated Branch Total Row
         b_grand_row = [Paragraph("<b>TOTAL</b>", table_cell_bold)]
         for prod in current_branch_products:
             b_grand_row.append(Paragraph(f"<b>{format_currency(b_col_totals[prod])}</b>", table_cell_bold))
@@ -279,7 +275,6 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         ]))
         branch_elements.append(branch_table)
         
-        # --- SUB-SECTION: MONTHLY TREND WITHOUT PRODUCT MIX ---
         branch_elements.append(Spacer(1, 4))
         b_month_df = b_df.groupby("Month")["NETMAINPRODUCT"].sum().reset_index()
         b_month_df = sort_by_month(b_month_df, "Month")
@@ -351,7 +346,6 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             ]
             cxl_table_data.append(row_c)
             
-        # Accentuated Cancellation Grand Row
         c_grand_row = [
             Paragraph("<b>TOTAL CANCELLATIONS</b>", table_cell_bold),
             Paragraph(f"<b>{format_currency(c_col_totals['FSP'])}</b>", table_cell_bold),
@@ -399,7 +393,6 @@ def process_branch_file(uploaded_file, branch_name):
         required_cols = ["STATUS", "NETMAINPRODUCT", "CBDD_NAME", "BDD_NAME", "PRODUCT_CODE"]
         if any(col not in df.columns for col in required_cols): return None
 
-        # Dynamically map the 6th Excel column (Column F -> index 5)
         df['Month'] = pd.to_datetime(df.iloc[:, 5], errors='coerce').dt.strftime('%B')
         df['Month'] = df['Month'].fillna('Unknown')
 
@@ -478,7 +471,7 @@ edited_cxl_df = st.sidebar.data_editor(
         "Qty": st.column_config.NumberColumn("QTY", min_value=1, step=1, default=1, required=True),
     },
     hide_index=True,
-    use_container_width=True,
+    width="stretch",
     key="batch_cxl_editor"
 )
 
@@ -542,12 +535,12 @@ try:
         data=pdf_data,
         file_name=f"Executive_Sales_Performance_Report.pdf",
         mime="application/pdf",
-        use_container_width=True
+        width="stretch"
     )
 except Exception as err:
     st.sidebar.error(f"PDF Compiler Standby: {err}")
 
-# -------------------- MAIN DASHBOARD VISUALIZATIONS (STREAMLIT SCREEN) --------------------
+# -------------------- MAIN DASHBOARD VISUALIZATIONS --------------------
 tab_titles = ["Consolidated Overview"] + [f"{name} Branch" for name in active_branches.keys()]
 tabs = st.tabs(tab_titles)
 
@@ -564,25 +557,25 @@ with tabs[0]:
         global_agency_prod = total_df.groupby(["Agency", "Product_Type"])["NETMAINPRODUCT"].sum().reset_index()
         global_agency_prod = sort_by_corporate_hierarchy(global_agency_prod, "Agency")
         fig_gap = px.bar(global_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=global_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
-        st.plotly_chart(fig_gap, use_container_width=True)
+        st.plotly_chart(fig_gap, width="stretch")
         
         st.markdown("**Agency and Product Mix Matrix Summary Table**")
         ui_global_pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
         ui_global_pivot = ui_global_pivot.reindex(index=AGENCY_ORDER, columns=PRODUCT_ORDER, fill_value=0)
         ui_global_pivot["Total Revenue"] = ui_global_pivot.sum(axis=1)
-        st.dataframe(format_currency_df(ui_global_pivot.reset_index(), PRODUCT_ORDER + ["Total Revenue"]), use_container_width=True, hide_index=True)
+        st.dataframe(format_currency_df(ui_global_pivot.reset_index(), PRODUCT_ORDER + ["Total Revenue"]), width="stretch", hide_index=True)
         
         st.write("---")
         st.subheader("Overall Portfolio Share Mix (Visual Chart)")
         prod_sum = total_df.groupby("Product_Type")["NETMAINPRODUCT"].sum().reset_index()
         fig_p = px.pie(prod_sum, names="Product_Type", values="NETMAINPRODUCT", hole=0.3, color="Product_Type", color_discrete_map=product_colours)
-        st.plotly_chart(fig_p, use_container_width=True)
+        st.plotly_chart(fig_p, width="stretch")
         
         st.markdown("**Data Table: Portfolio Share Breakdown**")
         prod_sum_display = prod_sum.copy()
         prod_sum_display["Contribution %"] = (prod_sum_display["NETMAINPRODUCT"] / max(grand_corporate_revenue, 1)) * 100
         prod_sum_display["Contribution %"] = prod_sum_display["Contribution %"].apply(format_pct)
-        st.dataframe(format_currency_df(prod_sum_display, ["NETMAINPRODUCT"]), use_container_width=True, hide_index=True)
+        st.dataframe(format_currency_df(prod_sum_display, ["NETMAINPRODUCT"]), width="stretch", hide_index=True)
     else:
         st.warning("No operating margins left to display.")
 
@@ -590,7 +583,6 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
     with tabs[idx]:
         st.header(f"📍 Operational Analysis: {b_name} Branch")
         if not b_df.empty:
-            # Layout splitting: Product Mix on left, New Monthly Metric Breakdown on right
             left_col, right_col = st.columns([3, 2])
             
             with left_col:
@@ -604,23 +596,22 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
 
                 branch_agency_prod = sort_by_corporate_hierarchy(branch_agency_prod, "Agency")
                 fig_br_ap = px.bar(branch_agency_prod, x="Agency", y="NETMAINPRODUCT", color="Product_Type", color_discrete_map=product_colours, barmode="stack", text=branch_agency_prod["NETMAINPRODUCT"].apply(format_chart_label))
-                st.plotly_chart(fig_br_ap, use_container_width=True)
+                st.plotly_chart(fig_br_ap, width="stretch")
                 
                 st.markdown(f"**Data Table: {b_name} Product Matrix**")
                 ui_branch_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
                 ui_branch_pivot = ui_branch_pivot.reindex(index=AGENCY_ORDER, columns=current_branch_products, fill_value=0)
                 ui_branch_pivot["Branch Total"] = ui_branch_pivot.sum(axis=1)
-                st.dataframe(format_currency_df(ui_branch_pivot.reset_index(), current_branch_products + ["Branch Total"]), use_container_width=True, hide_index=True)
+                st.dataframe(format_currency_df(ui_branch_pivot.reset_index(), current_branch_products + ["Branch Total"]), width="stretch", hide_index=True)
 
             with right_col:
                 st.subheader("Monthly Revenue Net Run-Rate")
                 branch_monthly = b_df.groupby("Month")["NETMAINPRODUCT"].sum().reset_index()
                 branch_monthly = sort_by_month(branch_monthly, "Month")
                 
-                # Visual continuous line chart representing the monthly net run-rate trend
                 fig_month = px.line(branch_monthly, x="Month", y="NETMAINPRODUCT", markers=True, text=branch_monthly["NETMAINPRODUCT"].apply(format_chart_label), labels={"NETMAINPRODUCT": "Net Sales ($)"})
                 fig_month.update_traces(textposition="top center", line_color="#1f77b4")
-                st.plotly_chart(fig_month, use_container_width=True)
+                st.plotly_chart(fig_month, width="stretch")
                 
                 st.markdown(f"**Data Table: Chronological Cycles Overview**")
-                st.dataframe(format_currency_df(branch_monthly, ["NETMAINPRODUCT"]), use_container_width=True, hide_index=True)
+                st.dataframe(format_currency_df(branch_monthly, ["NETMAINPRODUCT"]), width="stretch", hide_index=True)
