@@ -228,7 +228,8 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         branch_elements = []
         branch_elements.append(Paragraph(f"Branch: {b_name} (Net Portfolio Revenue: {format_currency(b_total)})", ParagraphStyle('BName', fontName='Helvetica-Bold', fontSize=10, spaceBefore=6, spaceAfter=4, textColor=colors.HexColor("#333333"))))
         
-        b_headers = ["Agency"] + current_branch_products + ["Branch Vol %", "Global Vol %"]
+        # Modified header to explicitly display Agency Total
+        b_headers = ["Agency"] + current_branch_products + ["Agency Total", "Branch Vol %", "Global Vol %"]
         b_table_data = [[Paragraph(bh, table_header_style) for bh in b_headers]]
         
         b_col_totals = {p: 0.0 for p in current_branch_products}
@@ -245,6 +246,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             br_vol = (row_tot / max(b_total, 1)) * 100
             gl_vol = (row_tot / max(grand_revenue, 1)) * 100
             
+            row.append(Paragraph(format_currency(row_tot), table_cell_bold))  # Agency Total addition
             row.append(Paragraph(format_pct(br_vol), table_cell_style))
             row.append(Paragraph(format_pct(gl_vol), table_cell_style))
             b_table_data.append(row)
@@ -252,14 +254,15 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         b_grand_row = [Paragraph("<b>TOTAL</b>", table_cell_bold)]
         for prod in current_branch_products:
             b_grand_row.append(Paragraph(f"<b>{format_currency(b_col_totals[prod])}</b>", table_cell_bold))
+        b_grand_row.append(Paragraph(f"<b>{format_currency(b_total)}</b>", table_cell_bold)) # Branch Total under column
         b_grand_row.append(Paragraph(f"<b>{format_pct((b_total/max(b_total,1))*100)}</b>", table_cell_bold))
         b_grand_row.append(Paragraph(f"<b>{format_pct((b_total/max(grand_revenue,1))*100)}</b>", table_cell_bold))
         b_table_data.append(b_grand_row)
             
         if b_name in ["LST", "TLT"]:
-            b_col_widths = [1.1*inch, 1.3*inch, 1.3*inch, 1.3*inch, 1.25*inch, 1.25*inch]
+            b_col_widths = [1.1*inch, 1.15*inch, 1.15*inch, 1.15*inch, 1.1*inch, 1.1*inch, 1.05*inch]
         else:
-            b_col_widths = [1.1*inch, 1.05*inch, 1.05*inch, 1.05*inch, 1.05*inch, 1.2*inch, 1.0*inch]
+            b_col_widths = [1.1*inch, 0.9*inch, 0.9*inch, 0.9*inch, 0.9*inch, 1.1*inch, 1.0*inch, 1.0*inch]
             
         branch_table = Table(b_table_data, colWidths=b_col_widths, repeatRows=1)
         branch_table.setStyle(TableStyle([
@@ -562,8 +565,19 @@ with tabs[0]:
         st.markdown("**Agency and Product Mix Matrix Summary Table**")
         ui_global_pivot = total_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
         ui_global_pivot = ui_global_pivot.reindex(index=AGENCY_ORDER, columns=PRODUCT_ORDER, fill_value=0)
+        
+        # Calculate row totals for UI view
         ui_global_pivot["Total Revenue"] = ui_global_pivot.sum(axis=1)
-        st.dataframe(format_currency_df(ui_global_pivot.reset_index(), PRODUCT_ORDER + ["Total Revenue"]), width="stretch", hide_index=True)
+        ui_global_pivot = ui_global_pivot.reset_index()
+        
+        # Generate summary sum bottom row explicitly
+        totals_row = {"Agency": "TOTAL"}
+        for p in PRODUCT_ORDER:
+            totals_row[p] = ui_global_pivot[p].sum()
+        totals_row["Total Revenue"] = ui_global_pivot["Total Revenue"].sum()
+        
+        ui_global_pivot = pd.concat([ui_global_pivot, pd.DataFrame([totals_row])], ignore_index=True)
+        st.dataframe(format_currency_df(ui_global_pivot, PRODUCT_ORDER + ["Total Revenue"]), width="stretch", hide_index=True)
         
         st.write("---")
         st.subheader("Overall Portfolio Share Mix (Visual Chart)")
@@ -601,8 +615,18 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
                 st.markdown(f"**Data Table: {b_name} Product Matrix**")
                 ui_branch_pivot = b_df.pivot_table(index="Agency", columns="Product_Type", values="NETMAINPRODUCT", aggfunc="sum", fill_value=0)
                 ui_branch_pivot = ui_branch_pivot.reindex(index=AGENCY_ORDER, columns=current_branch_products, fill_value=0)
+                
+                # Append explicit row-totals and column-totals for the specific Branch UI table view
                 ui_branch_pivot["Branch Total"] = ui_branch_pivot.sum(axis=1)
-                st.dataframe(format_currency_df(ui_branch_pivot.reset_index(), current_branch_products + ["Branch Total"]), width="stretch", hide_index=True)
+                ui_branch_pivot = ui_branch_pivot.reset_index()
+                
+                br_totals_row = {"Agency": "TOTAL"}
+                for p in current_branch_products:
+                    br_totals_row[p] = ui_branch_pivot[p].sum()
+                br_totals_row["Branch Total"] = ui_branch_pivot["Branch Total"].sum()
+                
+                ui_branch_pivot = pd.concat([ui_branch_pivot, pd.DataFrame([br_totals_row])], ignore_index=True)
+                st.dataframe(format_currency_df(ui_branch_pivot, current_branch_products + ["Branch Total"]), width="stretch", hide_index=True)
 
             with right_col:
                 st.subheader("Monthly Revenue Net Run-Rate")
