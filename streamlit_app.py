@@ -228,7 +228,6 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         branch_elements = []
         branch_elements.append(Paragraph(f"Branch: {b_name} (Net Portfolio Revenue: {format_currency(b_total)})", ParagraphStyle('BName', fontName='Helvetica-Bold', fontSize=10, spaceBefore=6, spaceAfter=4, textColor=colors.HexColor("#333333"))))
         
-        # Modified header to explicitly display Agency Total
         b_headers = ["Agency"] + current_branch_products + ["Agency Total", "Branch Vol %", "Global Vol %"]
         b_table_data = [[Paragraph(bh, table_header_style) for bh in b_headers]]
         
@@ -246,7 +245,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             br_vol = (row_tot / max(b_total, 1)) * 100
             gl_vol = (row_tot / max(grand_revenue, 1)) * 100
             
-            row.append(Paragraph(format_currency(row_tot), table_cell_bold))  # Agency Total addition
+            row.append(Paragraph(format_currency(row_tot), table_cell_bold))
             row.append(Paragraph(format_pct(br_vol), table_cell_style))
             row.append(Paragraph(format_pct(gl_vol), table_cell_style))
             b_table_data.append(row)
@@ -254,7 +253,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
         b_grand_row = [Paragraph("<b>TOTAL</b>", table_cell_bold)]
         for prod in current_branch_products:
             b_grand_row.append(Paragraph(f"<b>{format_currency(b_col_totals[prod])}</b>", table_cell_bold))
-        b_grand_row.append(Paragraph(f"<b>{format_currency(b_total)}</b>", table_cell_bold)) # Branch Total under column
+        b_grand_row.append(Paragraph(f"<b>{format_currency(b_total)}</b>", table_cell_bold))
         b_grand_row.append(Paragraph(f"<b>{format_pct((b_total/max(b_total,1))*100)}</b>", table_cell_bold))
         b_grand_row.append(Paragraph(f"<b>{format_pct((b_total/max(grand_revenue,1))*100)}</b>", table_cell_bold))
         b_table_data.append(b_grand_row)
@@ -266,6 +265,7 @@ def generate_pdf_report(grand_revenue, total_df, active_branches, valid_cxl_df, 
             
         branch_table = Table(b_table_data, colWidths=b_col_widths, repeatRows=1)
         branch_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), Hand=colors.HexColor("#2ca02c")),
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2ca02c")),
             ('ALIGN', (0,0), (-1,-1), 'CENTER'),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -538,7 +538,7 @@ try:
         data=pdf_data,
         file_name=f"Executive_Sales_Performance_Report.pdf",
         mime="application/pdf",
-        width="stretch"
+        key="download_executive_report"
     )
 except Exception as err:
     st.sidebar.error(f"PDF Compiler Standby: {err}")
@@ -629,13 +629,29 @@ for idx, (b_name, b_df) in enumerate(active_branches.items(), start=1):
                 st.dataframe(format_currency_df(ui_branch_pivot, current_branch_products + ["Branch Total"]), width="stretch", hide_index=True)
 
             with right_col:
-                st.subheader("Monthly Revenue Net Run-Rate")
+                st.subheader("Monthly Revenue Trends")
                 branch_monthly = b_df.groupby("Month")["NETMAINPRODUCT"].sum().reset_index()
                 branch_monthly = sort_by_month(branch_monthly, "Month")
                 
-                fig_month = px.line(branch_monthly, x="Month", y="NETMAINPRODUCT", markers=True, text=branch_monthly["NETMAINPRODUCT"].apply(format_chart_label), labels={"NETMAINPRODUCT": "Net Sales ($)"})
-                fig_month.update_traces(textposition="top center", line_color="#1f77b4")
-                st.plotly_chart(fig_month, width="stretch")
-                
-                st.markdown(f"**Data Table: Chronological Cycles Overview**")
-                st.dataframe(format_currency_df(branch_monthly, ["NETMAINPRODUCT"]), width="stretch", hide_index=True)
+                if not branch_monthly.empty:
+                    fig_monthly = px.line(
+                        branch_monthly, 
+                        x="Month", 
+                        y="NETMAINPRODUCT", 
+                        markers=True,
+                        line_shape="linear",
+                        labels={"NETMAINPRODUCT": "Net Sales ($)", "Month": "Fiscal Period"}
+                    )
+                    fig_monthly.update_traces(line_color="#1f77b4", marker=dict(size=8))
+                    st.plotly_chart(fig_monthly, width="stretch")
+                    
+                    st.markdown("**Monthly Distribution Summary**")
+                    branch_monthly_display = branch_monthly.copy()
+                    branch_total_revenue = branch_monthly_display["NETMAINPRODUCT"].sum()
+                    branch_monthly_display["Allocation %"] = (branch_monthly_display["NETMAINPRODUCT"] / max(branch_total_revenue, 1)) * 100
+                    branch_monthly_display["Allocation %"] = branch_monthly_display["Allocation %"].apply(format_pct)
+                    st.dataframe(format_currency_df(branch_monthly_display, ["NETMAINPRODUCT"]), width="stretch", hide_index=True)
+                else:
+                    st.info("No cyclical chronological history recorded for this target layout segment.")
+        else:
+            st.warning(f"No operational metrics or historical positions to display for the {b_name} portfolio frame.")
